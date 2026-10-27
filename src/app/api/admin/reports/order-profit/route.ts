@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import connectToDatabase from '@/lib/db';
 import Order from '@/models/Order';
+import Product from '@/models/Product';
 
 export async function GET(req: NextRequest) {
   try {
@@ -69,8 +70,9 @@ export async function GET(req: NextRequest) {
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
-        .select('shortId slug totalAmount deliveryCharge status createdAt items shippingAddress orderSource resellerCommission')
+        .select('shortId slug totalAmount deliveryCharge status createdAt items shippingAddress orderSource resellerCommission systemFee systemNote disbursement')
         .populate('user', 'name email phone')
+        .populate('items.product', 'name uploadedBy isMotherProduct purchasePrice variants price')
         .lean()
     ]);
 
@@ -78,18 +80,77 @@ export async function GET(req: NextRequest) {
       const totalAmount = order.totalAmount || 0;
       const deliveryCharge = order.deliveryCharge || 0;
       const netSales = Math.max(0, totalAmount - deliveryCharge);
+      const resellerCommission = Number(order.resellerCommission) || 0;
+      const systemFee = Number(order.systemFee) || 0;
+
+      const isResellerOrder = order.orderSource === 'reseller_storefront' ||
+        /^Reseller Order/i.test(order.systemNote || '') ||
+        order.resellerId != null;
+
+      const storefrontResellerId = order.storefrontResellerId 
+        ? String(order.storefrontResellerId) 
+        : (order.resellerId ? String(order.resellerId) : null);
 
       let totalCOGS = 0;
+      let hasOwnProducts = false;
+      let hasSupplierProducts = false;
+      let hasMotherProducts = false;
+
       if (Array.isArray(order.items)) {
         order.items.forEach((item: any) => {
           const qty = item.quantity || 1;
-          const purchasePrice = item.purchasePrice || (item.price ? item.price * 0.7 : 0);
-          totalCOGS += qty * purchasePrice;
+          const prod = item.product;
+
+          const uploaderId = prod?.uploadedBy ? String(prod.uploadedBy) : null;
+          const isPersonal = prod && (uploaderId != null || prod.isMotherProduct === false);
+
+          if (isPersonal) {
+            if (storefrontResellerId && uploaderId === storefrontResellerId) {
+              // Seller Reseller selling their OWN product
+              hasOwnProducts = true;
+              // Mother Shop pays 0 COGS for seller's own product
+            } else {
+              // Sourced from another reseller (Source/Supplier Reseller)
+              hasSupplierProducts = true;
+              // Mother Shop owes the Source Reseller the base product payout
+              const supplierBaseCost = prod?.purchasePrice ? Number(prod.purchasePrice) : (item.purchasePrice ? Number(item.purchasePrice) : 0);
+              totalCOGS += qty * supplierBaseCost;
+            }
+          } else {
+            hasMotherProducts = true;
+            // Mother Catalog product: Mother Shop's actual cost to acquire/produce
+            let motherItemCOGS = 0;
+            if (prod && Number(prod.purchasePrice) > 0) {
+              motherItemCOGS = Number(prod.purchasePrice);
+            } else if (!isResellerOrder && Number(item.purchasePrice) > 0) {
+              motherItemCOGS = Number(item.purchasePrice);
+            } else if (item.price) {
+              motherItemCOGS = Math.round(item.price * 0.7);
+            }
+            totalCOGS += qty * motherItemCOGS;
+          }
         });
       }
 
-      const resellerCommission = Number(order.resellerCommission) || 0;
-      const profit = netSales - totalCOGS - resellerCommission;
+      // Resilient check for own-product orders
+      if (!hasOwnProducts && !hasSupplierProducts && isResellerOrder && (/own product/i.test(order.systemNote || '') || (systemFee > 0 && Math.abs(netSales - (resellerCommission + systemFee)) <= 5))) {
+        hasOwnProducts = true;
+        totalCOGS = 0;
+      }
+
+      let profit = 0;
+      if (!isResellerOrder) {
+        // Direct Mother Shop Order
+        profit = netSales - totalCOGS;
+      } else if (hasOwnProducts && !hasSupplierProducts && !hasMotherProducts) {
+        // Pure Reseller Own-Product order (Seller sells their own product)
+        totalCOGS = 0;
+        profit = systemFee > 0 ? systemFee : Math.max(0, netSales - resellerCommission);
+      } else {
+        // Dropshipping (from Mother Catalog or from Supplier Reseller)
+        const motherRevenue = Math.max(0, netSales - resellerCommission);
+        profit = systemFee > 0 ? systemFee : Math.max(0, motherRevenue - totalCOGS);
+      }
 
       return {
         _id: order._id,
