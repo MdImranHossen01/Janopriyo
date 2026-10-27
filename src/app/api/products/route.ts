@@ -1,0 +1,306 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { NextRequest, NextResponse } from 'next/server';
+import { revalidateTag, revalidatePath } from 'next/cache';
+import connectToDatabase from '@/lib/db';
+import Product from '@/models/Product';
+import { auth } from '@/auth';
+import { generateUniqueSlug } from '@/lib/slugify-server';
+
+// GET all products
+export async function GET(req: NextRequest) {
+  try {
+    await connectToDatabase();
+
+    const searchParams = req.nextUrl.searchParams;
+    const ids = searchParams.get('ids');
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
+    // TODO: Consider requiring admin auth for limits > 100 or implementing a separate bulk endpoint
+    const limit = Math.min(1000, Math.max(1, parseInt(searchParams.get('limit') || '40')));
+    const skip = (page - 1) * limit;
+
+    const andConditions: any[] = [];
+
+    if (ids) {
+      andConditions.push({ _id: { $in: ids.split(',') } });
+    }
+
+    const search = searchParams.get('search');
+    if (search) {
+      const sanitizedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').slice(0, 100);
+      andConditions.push({
+        $or: [
+          { name: { $regex: sanitizedSearch, $options: 'i' } },
+          { description: { $regex: sanitizedSearch, $options: 'i' } },
+          { sku: { $regex: sanitizedSearch, $options: 'i' } }
+        ]
+      });
+    }
+
+    const category = searchParams.get('category');
+    if (category) {
+      andConditions.push({ categories: { $in: category.split(',') } });
+    }
+
+    const uploadedBy = searchParams.get('uploadedBy');
+    if (uploadedBy) {
+      if (uploadedBy === 'mother' || uploadedBy === 'null' || uploadedBy === 'admin') {
+        andConditions.push({
+          $or: [
+            { isMotherProduct: true },
+            { uploadedBy: null },
+            { uploadedBy: { $exists: false } },
+          ]
+        });
+      } else {
+        andConditions.push({ uploadedBy });
+      }
+    }
+
+    const tab = searchParams.get('tab') || 'all';
+    const session = await auth();
+    const isAdmin = session?.user && ['admin', 'super_admin', 'manager', 'moderator'].includes((session.user as any).role);
+    const isReseller = session?.user && (session.user as any).role === 'reseller';
+    
+    if (isAdmin) {
+      // Self-heal orphan products from deleted resellers
+      const Reseller = (await import('@/models/Reseller')).default;
+      const activeResellers = await Reseller.find({}, { _id: 1 }).lean();
+      const validResellerIds = new Set(activeResellers.map(r => r._id.toString()));
+
+      const allResellerProducts = await Product.find({ uploadedBy: { $ne: null, $exists: true } }, { _id: 1, uploadedBy: 1 }).lean();
+      const orphanIds = allResellerProducts
+        .filter(p => p.uploadedBy && !validResellerIds.has(p.uploadedBy.toString()))
+        .map(p => p._id);
+
+      if (orphanIds.length > 0) {
+        await Product.deleteMany({ _id: { $in: orphanIds } });
+      }
+
+      if (tab === 'mother') {
+        andConditions.push({
+          $or: [
+            { isMotherProduct: true },
+            { uploadedBy: null, isMotherProduct: { $ne: false } },
+            { uploadedBy: { $exists: false }, isMotherProduct: { $ne: false } },
+          ]
+        });
+      } else if (tab === 'reseller') {
+        andConditions.push({
+          uploadedBy: { $ne: null, $exists: true }
+        });
+      }
+    } else if (isReseller) {
+      // Logged-in reseller querying products for order editing or catalog lookup
+      andConditions.push({ isPublished: true });
+    } else {
+      // Non-admin storefront customers: strictly show active Mother Shop products
+      andConditions.push({
+        isPublished: true,
+        $or: [
+          { isMotherProduct: true },
+          { uploadedBy: null, isMotherProduct: { $ne: false } },
+          { uploadedBy: { $exists: false }, isMotherProduct: { $ne: false } },
+        ]
+      });
+    }
+
+    const query = andConditions.length > 0 ? { $and: andConditions } : {};
+
+    const [products, total] = await Promise.all([
+      Product.find(query)
+        .populate('categories')
+        .populate('brand')
+        .populate('uploadedBy', 'storeName subdomain')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Product.countDocuments(query)
+    ]);
+
+    let counts = undefined;
+    if (isAdmin) {
+      const [allCount, motherCount, resellerCount] = await Promise.all([
+        Product.countDocuments(),
+        Product.countDocuments({
+          $or: [
+            { isMotherProduct: true },
+            { uploadedBy: null, isMotherProduct: { $ne: false } },
+            { uploadedBy: { $exists: false }, isMotherProduct: { $ne: false } },
+          ]
+        }),
+        Product.countDocuments({ uploadedBy: { $ne: null, $exists: true } }),
+      ]);
+      counts = { all: allCount, mother: motherCount, reseller: resellerCount };
+    }
+
+    return NextResponse.json({
+      products,
+      counts,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
+  }
+}
+
+// POST create a new product (Admin only)
+export async function POST(req: NextRequest) {
+  try {
+    const session = await auth();
+
+    if (!session || !session.user || !(['admin', 'super_admin', 'manager', 'moderator'].includes((session.user as any)?.role))) {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    }
+
+    let body;
+    try {
+      body = await req.json();
+    } catch (parseError) {
+      return NextResponse.json({ message: 'Invalid JSON request body' }, { status: 400 });
+    }
+
+    const { name, slug, description, sku, barcode, categories, brand, tags, images, attributes, variants, batches, isFeatured, isNewArrival, isFlashSale, isPublished, isShared, discountRate } = body;
+    const { price, salePrice, purchasePrice, resellerPrice, stock } = body;
+
+    // Numeric validation and coercion
+    const rawPrice = parseFloat(price);
+    const parsedPrice = Number.isFinite(rawPrice) ? rawPrice : 0;
+
+    const rawSalePrice = parseFloat(salePrice);
+    const parsedSalePrice = Number.isFinite(rawSalePrice) ? rawSalePrice : undefined;
+
+    const rawPurchasePrice = parseFloat(purchasePrice);
+    const parsedPurchasePrice = Number.isFinite(rawPurchasePrice) ? rawPurchasePrice : undefined;
+
+    const rawResellerPrice = parseFloat(resellerPrice);
+    const parsedResellerPrice = Number.isFinite(rawResellerPrice) ? rawResellerPrice : undefined;
+
+    const rawStock = parseInt(stock, 10);
+    const parsedStock = Number.isFinite(rawStock) ? rawStock : 0;
+
+    const rawDiscountRate = parseFloat(discountRate);
+    const parsedDiscountRate = Number.isFinite(rawDiscountRate) ? rawDiscountRate : undefined;
+
+    // Validate required fields and price
+    const hasVariants = variants && variants.length > 0;
+    if (!name || !slug || !description ||
+      (!hasVariants && (!sku || isNaN(parsedPrice) || parsedPrice <= 0))) {
+      return NextResponse.json({
+        message: 'Invalid or missing required fields. When not using variants, Price must be a positive number and SKU is required.'
+      }, { status: 400 });
+    }
+
+    // Validate salePrice logic
+    if (parsedSalePrice !== undefined) {
+      if (isNaN(parsedSalePrice) || parsedSalePrice < 0 || parsedSalePrice > parsedPrice) {
+        return NextResponse.json({
+          message: 'Sale price must be a non-negative number and less than or equal to the regular price.'
+        }, { status: 400 });
+      }
+    }
+
+    // Coerce variant numeric fields and whitelist properties
+    const coercedVariants = (variants || []).map((v: any) => ({
+      _id: v._id || v.id,
+      color: v.color,
+      size: v.size,
+      sku: v.sku,
+      barcode: v.barcode?.trim() || undefined,
+      image: v.image,
+      images: Array.isArray(v.images) ? v.images : (v.image ? [v.image] : []),
+      price: Number.isFinite(parseFloat(v.price)) ? parseFloat(v.price) : 0,
+      salePrice: Number.isFinite(parseFloat(v.salePrice)) ? parseFloat(v.salePrice) : undefined,
+      purchasePrice: Number.isFinite(parseFloat(v.purchasePrice)) ? parseFloat(v.purchasePrice) : undefined,
+      resellerPrice: Number.isFinite(parseFloat(v.resellerPrice)) ? parseFloat(v.resellerPrice) : undefined,
+      stock: Number.isFinite(parseInt(v.stock, 10)) ? parseInt(v.stock, 10) : 0,
+      discountRate: Number.isFinite(parseFloat(v.discountRate)) ? parseFloat(v.discountRate) : undefined,
+      batches: Array.isArray(v.batches) ? v.batches.map((b: any) => ({
+        batchNumber: b.batchNumber,
+        expiryDate: b.expiryDate ? new Date(b.expiryDate) : undefined,
+        stock: Number.isFinite(parseInt(b.stock, 10)) ? parseInt(b.stock, 10) : 0,
+      })) : [],
+    }));
+
+    const sanitizedBatches = Array.isArray(batches) ? batches.map((b: any) => ({
+      batchNumber: b.batchNumber,
+      expiryDate: b.expiryDate ? new Date(b.expiryDate) : undefined,
+      stock: Number.isFinite(parseInt(b.stock, 10)) ? parseInt(b.stock, 10) : 0,
+    })) : [];
+
+    await connectToDatabase();
+
+    const maxRetries = 3;
+    let attempt = 0;
+    let lastError;
+
+    while (attempt < maxRetries) {
+      attempt++;
+      const currentSlug = attempt === 1 ? slug : `${slug}-${attempt - 1}`;
+      const uniqueSlug = await generateUniqueSlug(Product, currentSlug);
+
+      try {
+        const newProduct = await Product.create({
+          name,
+          slug: uniqueSlug,
+          description,
+          price: parsedPrice,
+          salePrice: parsedSalePrice,
+          purchasePrice: parsedPurchasePrice,
+          resellerPrice: parsedResellerPrice,
+          discountRate: parsedDiscountRate,
+          sku,
+          barcode: barcode?.trim() || undefined,
+          stock: parsedStock,
+          categories: categories || [],
+          brand: brand || undefined,
+          tags: tags || [],
+          images: images || [],
+          batches: sanitizedBatches,
+          attributes: attributes || [],
+          variants: coercedVariants,
+          isFeatured: isFeatured !== undefined ? isFeatured : false,
+          isNewArrival: isNewArrival !== undefined ? isNewArrival : false,
+          isFlashSale: isFlashSale !== undefined ? Boolean(isFlashSale) : false,
+          isPublished: isPublished !== undefined ? isPublished : true,
+          isShared: isShared !== undefined ? isShared : false,
+          isMotherProduct: true,
+        });
+
+        revalidateTag('products', 'max');
+        revalidatePath('/');
+        return NextResponse.json(newProduct, { status: 201 });
+      } catch (error: any) {
+        lastError = error;
+        if (error.code === 11000 && error.keyPattern?.slug) {
+          // If slug conflict, retry with incremented slug
+          continue;
+        }
+
+        // If other duplicate error (e.g. SKU), or other DB error, return 400
+        if (error.code === 11000) {
+          const field = Object.keys(error.keyPattern || {})[0] || 'slug/SKU';
+          return NextResponse.json({
+            message: `Product with this ${field} already exists.`
+          }, { status: 400 });
+        }
+        throw error;
+      }
+    }
+
+    // If we exhausted retries
+    return NextResponse.json({
+      message: 'Failed to generate a unique slug after several attempts. Please try a different name or slug.',
+      error: lastError?.message
+    }, { status: 400 });
+  } catch (error) {
+    console.error('Error creating product:', error);
+    return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });
+  }
+}
+

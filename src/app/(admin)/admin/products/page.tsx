@@ -1,0 +1,1383 @@
+'use client';
+
+import * as React from 'react';
+import { useState, useEffect, Suspense } from 'react';
+import Image from 'next/image';
+import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { 
+  Plus, 
+  Edit, 
+  Trash, 
+  Loader2, 
+  Search, 
+  DatabaseZap, 
+  Download, 
+  MoreHorizontal,
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  PackagePlus,
+  Store,
+  Eye,
+  EyeOff,
+  ExternalLink,
+  Users,
+  CheckCircle2
+} from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { toast } from 'sonner';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Swal from 'sweetalert2';
+import { Pagination } from '@/components/ui/pagination';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+
+interface AdminProduct {
+  _id: string;
+  name: string;
+  sku: string;
+  price: number;
+  salePrice?: number;
+  stock: number;
+  isPublished: boolean;
+  images?: string[];
+  slug: string;
+  brand?: any;
+  batches?: any[];
+  views?: number;
+  totalSales?: number;
+  description?: string;
+  categories?: any[];
+  variants?: any[];
+  purchasePrice?: number;
+  resellerPrice?: number;
+  uploadedBy?: { _id: string; storeName: string; subdomain: string } | null;
+  isMotherProduct?: boolean;
+}
+
+function ProductsContent() {
+  const [products, setProducts] = useState<AdminProduct[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1'));
+  const [pagination, setPagination] = useState({ total: 0, totalPages: 1 });
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+
+  // Add Stock Modal State
+  const [addStockModalOpen, setAddStockModalOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<AdminProduct | null>(null);
+  const [stockToAddTopLevel, setStockToAddTopLevel] = useState<number>(0);
+  const [variantStockUpdates, setVariantStockUpdates] = useState<{ [variantId: string]: number }>({});
+  const [batchNumber, setBatchNumber] = useState('');
+  const [expiryDate, setExpiryDate] = useState('');
+  const [submittingStock, setSubmittingStock] = useState(false);
+
+  const [activeTab, setActiveTab] = useState<'all' | 'mother' | 'reseller'>('all');
+  const [counts, setCounts] = useState({ all: 0, mother: 0, reseller: 0 });
+
+  // Add to Mother Shop Modal State
+  const [addToMotherModalOpen, setAddToMotherModalOpen] = useState(false);
+  const [selectedResellerProduct, setSelectedResellerProduct] = useState<AdminProduct | null>(null);
+  const [motherSellingPrice, setMotherSellingPrice] = useState<string>('');
+  const [submittingToMother, setSubmittingToMother] = useState(false);
+
+  const limit = 10;
+
+  const fetchProducts = async (signal?: AbortSignal, page = currentPage, tab = activeTab) => {
+    try {
+      setLoading(true);
+      const response = await fetch(`/api/products?page=${page}&limit=${limit}&tab=${tab}`, { signal });
+      if (!response.ok) {
+        toast.error(`Failed to fetch products: ${response.status} ${response.statusText}`);
+        return;
+      }
+      const data = await response.json();
+      setProducts(Array.isArray(data.products) ? data.products : []);
+      setPagination(data.pagination || { total: 0, totalPages: 1 });
+      if (data.counts) {
+        setCounts(data.counts);
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') return;
+      toast.error('Failed to fetch products');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTabChange = (tab: 'all' | 'mother' | 'reseller') => {
+    setActiveTab(tab);
+    setCurrentPage(1);
+    fetchProducts(undefined, 1, tab);
+  };
+
+  const openAddToMotherModal = (product: AdminProduct) => {
+    setSelectedResellerProduct(product);
+    setMotherSellingPrice(String(product.salePrice || product.price || 0));
+    setAddToMotherModalOpen(true);
+  };
+
+  const handleConfirmAddToMother = async () => {
+    if (!selectedResellerProduct) return;
+    const priceNum = Number(motherSellingPrice);
+    if (isNaN(priceNum) || priceNum <= 0) {
+      toast.error('Please enter a valid selling price');
+      return;
+    }
+
+    setSubmittingToMother(true);
+    try {
+      const res = await fetch(`/api/products/${selectedResellerProduct._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          isMotherProduct: true,
+          price: priceNum,
+          salePrice: null,
+          discountRate: null,
+        }),
+      });
+
+      if (res.ok) {
+        await Swal.fire({
+          icon: 'success',
+          title: 'Added to Mother Shop!',
+          text: `"${selectedResellerProduct.name}" is now live on the Mother Shop storefront.`,
+          confirmButtonColor: '#00D1B2',
+          customClass: { popup: 'rounded-xl', confirmButton: 'rounded-lg px-4 py-2 font-bold' },
+        });
+        setAddToMotherModalOpen(false);
+        fetchProducts(undefined, currentPage, activeTab);
+      } else {
+        const err = await res.json();
+        toast.error(err.message || 'Failed to add to Mother Shop');
+      }
+    } catch {
+      toast.error('Network error occurred');
+    } finally {
+      setSubmittingToMother(false);
+    }
+  };
+
+  const handleRemoveFromMother = async (product: AdminProduct) => {
+    const confirm = await Swal.fire({
+      title: 'Remove from Mother Shop?',
+      text: `Do you want to remove "${product.name}" from the Mother Shop? It will remain active in the reseller's store.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Yes, Remove It',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#ef4444',
+      cancelButtonColor: '#6b7280',
+      customClass: { popup: 'rounded-xl', confirmButton: 'rounded-lg px-4 py-2 font-bold', cancelButton: 'rounded-lg px-4 py-2' },
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    try {
+      const res = await fetch(`/api/products/${product._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isMotherProduct: false }),
+      });
+
+      if (res.ok) {
+        toast.success(`"${product.name}" removed from Mother Shop`);
+        fetchProducts(undefined, currentPage, activeTab);
+      } else {
+        const err = await res.json();
+        toast.error(err.message || 'Failed to remove from Mother Shop');
+      }
+    } catch {
+      toast.error('Network error occurred');
+    }
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchProducts(controller.signal);
+    return () => controller.abort();
+  }, []);
+
+  const handleDelete = async (id: string) => {
+    const result = await Swal.fire({
+      title: 'Are you sure?',
+      text:"This product will be permanently deleted!",
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#00D1B2',
+      cancelButtonColor: '#d33',
+      confirmButtonText: 'Yes, delete it!',
+      customClass: {
+        popup: 'rounded-xl',
+        confirmButton: 'rounded-lg px-4 py-2 font-bold',
+        cancelButton: 'rounded-lg px-4 py-2 font-bold'
+      }
+    });
+
+    if (result.isConfirmed) {
+      try {
+        const response = await fetch(`/api/products/${id}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json().catch(() => ({}));
+
+        if (response.ok) {
+          toast.success(data.message || 'Product deleted successfully');
+          setProducts(products.filter(product => product._id !== id));
+          fetchProducts(undefined, currentPage);
+        } else {
+          toast.error(data.message || data.error || 'Failed to delete product');
+        }
+      } catch (error) {
+        toast.error('An error occurred while deleting the product');
+      }
+    }
+  };
+
+  const handleTogglePublish = async (product: AdminProduct) => {
+    const newStatus = !product.isPublished;
+    const actionVerb = newStatus ? 'publish' : 'hide';
+    const actionTitle = newStatus ? 'Publish Product' : 'Hide from Store';
+
+    const confirmResult = await Swal.fire({
+      title: `${actionTitle}?`,
+      text: `Do you want to ${actionVerb} "${product.name}" ${newStatus ? 'on' : 'from'} the storefront?`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: `Yes, ${actionVerb}!`,
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: '#00D1B2',
+      cancelButtonColor: '#d33',
+    });
+
+    if (!confirmResult.isConfirmed) return;
+
+    try {
+      const res = await fetch(`/api/products/${product._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPublished: newStatus }),
+      });
+
+      if (res.ok) {
+        toast.success(`Product ${newStatus ? 'published' : 'hidden'} successfully`);
+        setProducts(prev => prev.map(p => p._id === product._id ? { ...p, isPublished: newStatus } : p));
+      } else {
+        const err = await res.json();
+        toast.error(err.message || `Failed to ${actionVerb} product`);
+      }
+    } catch {
+      toast.error('Network error while updating product visibility');
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.length === filteredProducts.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredProducts.map(p => p._id));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const cleanDescription = (html: string | undefined): string => {
+    if (!html) return '';
+    return html.replace(/<[^>]*>?/gm, '').replace(/(\r\n|\n|\r)/gm,"").trim();
+  };
+
+  const getAbsoluteUrl = (url: string): string => {
+    if (!url) return '';
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    return `${origin}${url.startsWith('/') ? '' : '/'}${url}`;
+  };
+
+  const exportToCSV = async () => {
+    let productsToExport: AdminProduct[] = [];
+    setExportLoading(true);
+
+    try {
+      toast.info('Fetching products for export...');
+      const response = await fetch(`/api/products?page=1&limit=1000`);
+      if (response.ok) {
+        const data = await response.json();
+        const allProducts: AdminProduct[] = Array.isArray(data.products) ? data.products : [];
+        if (selectedIds.length > 0) {
+          productsToExport = allProducts.filter(p => selectedIds.includes(p._id));
+        } else {
+          productsToExport = allProducts;
+        }
+      } else {
+        productsToExport = selectedIds.length > 0 
+          ? products.filter(p => selectedIds.includes(p._id))
+          : products;
+      }
+
+      if (productsToExport.length === 0) {
+        toast.error('No products to export');
+        return;
+      }
+
+      const headers = [
+        'id', 'title', 'item_group_id', 'description', 'availability', 'condition',
+        'sku', 'price', 'sale_price', 'link', 'image_link', 'brand', 'fb_product_category',
+        'colour', 'additional_image_link'
+      ];
+
+      const rows: any[][] = [];
+
+      productsToExport.forEach(p => {
+        if (p.variants && p.variants.length > 0) {
+          p.variants.forEach((v: any, index: number) => {
+            const varPrice = v.price || p.price || 0;
+            const varSalePrice = v.salePrice || p.salePrice || undefined;
+            const varPriceVal = `${Math.round(varPrice)} BDT`;
+            const varSalePriceVal = varSalePrice && varSalePrice < varPrice ? `${Math.round(varSalePrice)} BDT` : '';
+            const varStock = v.stock !== undefined ? v.stock : (p.stock || 0);
+
+            const primaryImage = v.image || (p.images && p.images[0]) || '';
+            const additionalImages = (p.images || [])
+              .filter(img => img !== primaryImage)
+              .map(img => getAbsoluteUrl(img))
+              .join(',');
+
+            rows.push([
+              v._id || `${p._id}-${index}`,
+              p.name,
+              p._id,
+              cleanDescription(p.description),
+              varStock > 0 ? 'in stock' : 'out of stock',
+              'new',
+              v.sku || p.sku || '',
+              varPriceVal,
+              varSalePriceVal,
+              `${window.location.origin}/product/${p.slug}`,
+              getAbsoluteUrl(primaryImage),
+              'unknown',
+              p.categories?.[0]?.name || '',
+              v.color || '',
+              additionalImages
+            ]);
+          });
+        } else {
+          const priceVal = `${Math.round(p.price || 0)} BDT`;
+          const salePriceVal = p.salePrice && p.salePrice < p.price ? `${Math.round(p.salePrice)} BDT` : '';
+          const stockVal = p.stock || 0;
+          const primaryImage = (p.images && p.images[0]) || '';
+          const additionalImages = (p.images || [])
+            .slice(1)
+            .map(img => getAbsoluteUrl(img))
+            .join(',');
+
+          rows.push([
+            p._id,
+            p.name,
+            p._id,
+            cleanDescription(p.description),
+            stockVal > 0 ? 'in stock' : 'out of stock',
+            'new',
+            p.sku || '',
+            priceVal,
+            salePriceVal,
+            `${window.location.origin}/product/${p.slug}`,
+            getAbsoluteUrl(primaryImage),
+            'unknown',
+            p.categories?.[0]?.name || '',
+            '',
+            additionalImages
+          ]);
+        }
+      });
+
+      const csvContent = 'data:text/csv;charset=utf-8,' 
+        + [headers.join(','), ...rows.map(e => e.map(item => `"${String(item).replace(/"/g, '""')}"`).join(','))].join('\n');
+
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `products_catalog_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      toast.success('Products exported successfully!');
+    } catch (error) {
+      console.error('Export Error:', error);
+      toast.error('Failed to export products');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  // Open Add Stock Modal
+  const openAddStockModal = (product: AdminProduct) => {
+    setSelectedProduct(product);
+    setStockToAddTopLevel(0);
+    const initialVariants: { [id: string]: number } = {};
+    if (product.variants && product.variants.length > 0) {
+      product.variants.forEach(v => {
+        initialVariants[v._id || `${v.color}-${v.size}`] = 0;
+      });
+    }
+    setVariantStockUpdates(initialVariants);
+    setBatchNumber(`BATCH-${new Date().getFullYear()}${(new Date().getMonth()+1).toString().padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`);
+    setExpiryDate('');
+    setAddStockModalOpen(true);
+  };
+
+  // Handle Add Stock Submit
+  const handleSaveStock = async () => {
+    if (!selectedProduct) return;
+    setSubmittingStock(true);
+
+    try {
+      const hasVariants = selectedProduct.variants && selectedProduct.variants.length > 0;
+      let updatedVariants = undefined;
+      let updatedStock = selectedProduct.stock || 0;
+      let updatedBatches = Array.isArray(selectedProduct.batches) ? [...selectedProduct.batches] : [];
+
+      if (hasVariants) {
+        let totalVariantStock = 0;
+        updatedVariants = selectedProduct.variants!.map(v => {
+          const key = v._id || `${v.color}-${v.size}`;
+          const addAmount = Number(variantStockUpdates[key]) || 0;
+          const newVarStock = (v.stock || 0) + addAmount;
+          totalVariantStock += newVarStock;
+
+          let varBatches = Array.isArray(v.batches) ? [...v.batches] : [];
+          if (addAmount > 0 && batchNumber) {
+            varBatches.push({
+              batchNumber,
+              expiryDate: expiryDate ? new Date(expiryDate) : undefined,
+              stock: addAmount
+            });
+          }
+
+          return {
+            ...v,
+            stock: newVarStock,
+            batches: varBatches
+          };
+        });
+
+        updatedStock = totalVariantStock;
+      } else {
+        const addAmount = Number(stockToAddTopLevel) || 0;
+        updatedStock = (selectedProduct.stock || 0) + addAmount;
+        if (addAmount > 0 && batchNumber) {
+          updatedBatches.push({
+            batchNumber,
+            expiryDate: expiryDate ? new Date(expiryDate) : undefined,
+            stock: addAmount
+          });
+        }
+      }
+
+      const res = await fetch(`/api/products/${selectedProduct._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stock: updatedStock,
+          ...(hasVariants && { variants: updatedVariants }),
+          ...(!hasVariants && { batches: updatedBatches })
+        })
+      });
+
+      if (res.ok) {
+        toast.success(`Stock updated successfully for ${selectedProduct.name}`);
+        setAddStockModalOpen(false);
+        fetchProducts(undefined, currentPage);
+      } else {
+        toast.error('Failed to update stock');
+      }
+    } catch (error) {
+      console.error('Error saving stock:', error);
+      toast.error('An error occurred while saving stock');
+    } finally {
+      setSubmittingStock(false);
+    }
+  };
+
+  const calculateCumulativeStock = (product: AdminProduct) => {
+    if (product.variants && product.variants.length > 0) {
+      return product.variants.reduce((acc, curr) => acc + (curr.stock || 0), 0);
+    }
+    return product.stock || 0;
+  };
+
+  const filteredProducts = products.filter(product =>
+    product.name.toLowerCase().includes(search.toLowerCase()) ||
+    product.sku?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="flex-1 space-y-3 sm:space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div>
+          <h2 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight">Products</h2>
+          <p className="text-muted-foreground text-xs sm:text-sm">
+            Manage your product catalog, size/color variant stocks, batches, and pricing.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportToCSV}
+            disabled={exportLoading}
+            className="flex items-center gap-1.5 h-8 text-xs font-semibold"
+          >
+            {exportLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
+            {selectedIds.length > 0 ? `Export (${selectedIds.length})` : 'Export All'}
+          </Button>
+          <Link href="/admin/products/new">
+            <Button size="sm" className="h-8 text-xs font-bold gap-1">
+              <Plus className="h-3.5 w-3.5" /> Add Product
+            </Button>
+          </Link>
+        </div>
+      </div>
+
+      {/* Scope / Source Filter Tabs */}
+      <div className="flex flex-wrap items-center gap-2 border-b pb-2">
+        <Button
+          variant={activeTab === 'all' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8 text-xs font-semibold gap-1.5"
+          onClick={() => handleTabChange('all')}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span>All Products</span>
+          {counts.all > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px]">
+              {counts.all}
+            </Badge>
+          )}
+        </Button>
+        <Button
+          variant={activeTab === 'mother' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8 text-xs font-semibold gap-1.5"
+          onClick={() => handleTabChange('mother')}
+        >
+          <Store className="h-3.5 w-3.5" />
+          <span>Mother Shop</span>
+          {counts.mother > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px]">
+              {counts.mother}
+            </Badge>
+          )}
+        </Button>
+        <Button
+          variant={activeTab === 'reseller' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8 text-xs font-semibold gap-1.5"
+          onClick={() => handleTabChange('reseller')}
+        >
+          <Users className="h-3.5 w-3.5" />
+          <span>Reseller Products</span>
+          {counts.reseller > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px]">
+              {counts.reseller}
+            </Badge>
+          )}
+        </Button>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Search products by name or SKU..."
+            className="pl-8 h-9 text-xs sm:text-sm"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="rounded-xl border bg-background overflow-hidden relative shadow-xs">
+        {/* Desktop Table View */}
+        <div className="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-12">
+                  <Checkbox
+                    checked={filteredProducts.length > 0 && filteredProducts.every(p => selectedIds.includes(p._id))}
+                    onCheckedChange={toggleSelectAll}
+                  />
+                </TableHead>
+                <TableHead className="w-8"></TableHead>
+                <TableHead className="w-[64px]">Image</TableHead>
+                <TableHead className="min-w-[180px] max-w-[240px]">Name</TableHead>
+                <TableHead className="w-[130px] max-w-[140px]">SKU</TableHead>
+                <TableHead className="w-[100px] whitespace-nowrap">Price</TableHead>
+                <TableHead className="min-w-[150px]">Total Stock (Cumulative)</TableHead>
+                <TableHead>Views</TableHead>
+                <TableHead>Sales</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={11} className="h-24 text-center">
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
+                  </TableCell>
+                </TableRow>
+              ) : filteredProducts.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={11} className="h-24 text-center">
+                    No products found.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredProducts.map((product) => {
+                  const totalStock = calculateCumulativeStock(product);
+                  const hasVariants = product.variants && product.variants.length > 0;
+                  const isExpanded = expandedRow === product._id;
+
+                  return (
+                    <React.Fragment key={product._id}>
+                      <TableRow className={selectedIds.includes(product._id) ?"bg-muted/50" :""}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedIds.includes(product._id)}
+                            onCheckedChange={() => toggleSelect(product._id)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {hasVariants ? (
+                            <button
+                              onClick={() => setExpandedRow(isExpanded ? null : product._id)}
+                              className="p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground"
+                              title="Expand variants stock"
+                            >
+                              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            </button>
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-12 w-12 overflow-hidden rounded-md border bg-muted">
+                            {product.images && product.images.length > 0 ? (
+                              <Image 
+                                src={product.images[0]} 
+                                alt={product.name} 
+                                width={48}
+                                height={48}
+                                className="h-full w-full object-cover" 
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center">
+                                <Plus className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-medium max-w-[240px]">
+                          <div className="flex flex-col gap-0.5">
+                            <Link 
+                              href={`/product/${product.slug}`} 
+                              target="_blank"
+                              className="hover:text-primary transition-colors hover:underline decoration-primary/30 underline-offset-4 truncate font-bold text-sm"
+                            >
+                              {product.name}
+                            </Link>
+                            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                              {product.brand && (
+                                <span className="text-muted-foreground font-semibold flex items-center gap-1">
+                                  Brand: <span className="text-foreground">{typeof product.brand === 'object' ? product.brand.name : product.brand}</span>
+                                </span>
+                              )}
+                              {product.uploadedBy ? (
+                                <>
+                                  <Link
+                                    href={`/admin/users?search=${encodeURIComponent(product.uploadedBy.storeName)}`}
+                                    className="inline-flex items-center gap-1 font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 hover:opacity-80 transition-opacity max-w-[120px] truncate"
+                                    title={`Reseller: ${product.uploadedBy.storeName}`}
+                                  >
+                                    <Store className="h-2.5 w-2.5 shrink-0" />
+                                    <span className="truncate">{product.uploadedBy.storeName}</span>
+                                  </Link>
+                                  {product.isMotherProduct ? (
+                                    <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 text-[9px] px-1.5 py-0 font-semibold">
+                                      In Mother Shop
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground border-dashed">
+                                      Not in Mother Shop
+                                    </Badge>
+                                  )}
+                                </>
+                              ) : (
+                                <span className="text-[10px] text-muted-foreground">Admin (Mother Store)</span>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground w-[130px] max-w-[140px]">
+                          <span className="truncate block" title={product.sku || '-'}>
+                            {product.sku || '-'}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className={product.salePrice ? 'text-xs line-through text-muted-foreground' : ''}>
+                              ৳{product.price ? Math.round(product.price) : '0'}
+                            </span>
+                            {product.salePrice && (
+                              <span className="font-semibold text-primary">
+                                ৳{Math.round(product.salePrice)}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`font-bold text-sm ${totalStock <= 5 ? 'text-destructive' : 'text-foreground'}`}>
+                                {totalStock} pcs
+                              </span>
+                              {hasVariants && (
+                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-primary/40 text-primary">
+                                  {product.variants!.length} Variants
+                                </Badge>
+                              )}
+                            </div>
+                            {/* Quick Variant badges display */}
+                            {hasVariants && (
+                              <div className="flex flex-wrap gap-1 max-w-[260px]">
+                                {product.variants!.slice(0, 3).map((v: any, idx: number) => (
+                                  <span key={idx} className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
+                                    {v.color || ''}{v.color && v.size ? '/' : ''}{v.size || ''}: <b className="text-foreground">{v.stock || 0}</b>
+                                  </span>
+                                ))}
+                                {product.variants!.length > 3 && (
+                                  <span className="text-[10px] text-primary cursor-pointer font-medium" onClick={() => setExpandedRow(isExpanded ? null : product._id)}>
+                                    +{product.variants!.length - 3} more...
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium text-muted-foreground">{product.views ?? 0}</span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-bold text-primary">{product.totalSales ?? 0}</span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={product.isPublished ? 'default' : 'secondary'}>
+                            {product.isPublished ? 'Published' : 'Draft'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                              {product.uploadedBy ? (
+                                <>
+                                  {!product.isMotherProduct ? (
+                                    <DropdownMenuItem onClick={() => openAddToMotherModal(product)} className="gap-2 font-semibold text-emerald-600 dark:text-emerald-400">
+                                      <PackagePlus className="h-4 w-4" />
+                                      <span>Add to Mother Shop</span>
+                                    </DropdownMenuItem>
+                                  ) : (
+                                    <DropdownMenuItem onClick={() => handleRemoveFromMother(product)} className="gap-2 font-semibold text-amber-600 dark:text-amber-400">
+                                      <EyeOff className="h-4 w-4" />
+                                      <span>Remove from Mother Shop</span>
+                                    </DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuItem onClick={() => handleTogglePublish(product)} className="gap-2 font-medium">
+                                    {product.isPublished ? (
+                                      <>
+                                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                                        <span>Unpublish Globally</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Eye className="h-4 w-4 text-green-600" />
+                                        <span className="text-green-700 dark:text-green-400">Publish Globally</span>
+                                      </>
+                                    )}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem asChild className="gap-2">
+                                    <Link href={`/product/${product.slug}`} target="_blank" className="flex items-center gap-2 w-full">
+                                      <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                                      <span>View Storefront</span>
+                                    </Link>
+                                  </DropdownMenuItem>
+                                </>
+                              ) : (
+                                <>
+                                  <DropdownMenuItem onClick={() => openAddStockModal(product)} className="text-primary font-semibold gap-2">
+                                    <PackagePlus className="h-4 w-4" /> Add Stock
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => router.push(`/admin/products/${product._id}/edit`)} className="gap-2">
+                                    <Edit className="h-4 w-4" /> Edit
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => handleTogglePublish(product)} className="gap-2">
+                                    {product.isPublished ? (
+                                      <>
+                                        <EyeOff className="h-4 w-4 text-amber-600" />
+                                        <span>Hide / Unpublish</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Eye className="h-4 w-4 text-green-600" />
+                                        <span>Publish</span>
+                                      </>
+                                    )}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => handleDelete(product._id)} className="text-destructive gap-2">
+                                    <Trash className="h-4 w-4" /> Delete
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+
+                      {/* Expanded Row for Variants & Batches Breakdown */}
+                      {isExpanded && hasVariants && (
+                        <TableRow className="bg-muted/30 border-y border-muted">
+                          <TableCell colSpan={11} className="p-3 pl-12">
+                            <div className="bg-background rounded-lg border p-3 space-y-2">
+                              <div className="text-xs font-bold text-foreground flex items-center gap-1.5 pb-1.5 border-b">
+                                <Layers className="h-3.5 w-3.5 text-primary" />
+                                Variants Stock Breakdown (সাইজ ও কালার অনুযায়ী স্টক)
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 text-xs">
+                                {product.variants!.map((v: any, vIdx: number) => (
+                                  <div key={vIdx} className="p-2 border rounded-md bg-muted/20 flex flex-col justify-between gap-1">
+                                    <div className="flex justify-between items-center font-bold text-foreground">
+                                      <span>{v.color || 'No Color'} {v.size ? `(${v.size})` : ''}</span>
+                                      <Badge variant={(v.stock || 0) > 0 ? 'outline' : 'destructive'} className="text-[10px]">
+                                        {v.stock || 0} in stock
+                                      </Badge>
+                                    </div>
+                                    <div className="flex justify-between text-[11px] text-muted-foreground">
+                                      <span>Price: ৳{Math.round(v.price || product.price)}</span>
+                                      {v.sku && <span className="font-mono">{v.sku}</span>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </React.Fragment>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        {/* Mobile Products Card View */}
+        <div className="block md:hidden p-2 space-y-2.5">
+          {loading ? (
+            <div className="h-24 flex items-center justify-center">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            </div>
+          ) : filteredProducts.length === 0 ? (
+            <div className="h-24 flex items-center justify-center text-xs text-muted-foreground">
+              No products found.
+            </div>
+          ) : (
+            filteredProducts.map((product) => {
+              const totalStock = calculateCumulativeStock(product);
+              const hasVariants = product.variants && product.variants.length > 0;
+              const isExpanded = expandedRow === product._id;
+
+              return (
+                <div
+                  key={product._id}
+                  className={`bg-card border border-border/90 rounded-xl p-3 text-xs space-y-2 shadow-xs transition-colors ${
+                    selectedIds.includes(product._id) ?"border-primary bg-primary/5" :""
+                  }`}
+                >
+                  <div className="flex items-start gap-2.5">
+                    <Checkbox
+                      checked={selectedIds.includes(product._id)}
+                      onCheckedChange={() => toggleSelect(product._id)}
+                      className="mt-1 shrink-0"
+                    />
+
+                    <div className="h-14 w-14 overflow-hidden rounded-lg border bg-muted shrink-0">
+                      {product.images && product.images.length > 0 ? (
+                        <Image 
+                          src={product.images[0]} 
+                          alt={product.name} 
+                          width={56}
+                          height={56}
+                          className="h-full w-full object-cover" 
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                          <Plus className="h-4 w-4" />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <Link
+                        href={`/product/${product.slug}`}
+                        target="_blank"
+                        className="font-bold text-foreground text-xs hover:text-primary transition-colors line-clamp-2"
+                      >
+                        {product.name}
+                      </Link>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px] text-muted-foreground">
+                        {product.sku && <span className="font-mono">{product.sku}</span>}
+                        {product.brand && (
+                          <span className="truncate">
+                            • {typeof product.brand === 'object' ? product.brand.name : product.brand}
+                          </span>
+                        )}
+                        {product.uploadedBy ? (
+                          <span className="inline-flex items-center gap-1 font-semibold px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[10px]">
+                            <Store className="h-2.5 w-2.5 shrink-0" />
+                            {product.uploadedBy.storeName}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">• Admin</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Pricing & Stock Details Row */}
+                  <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-dashed text-[11px]">
+                    <div>
+                      <span className="text-muted-foreground">Price: </span>
+                      <span className="font-bold text-foreground">
+                        ৳{Math.round(product.salePrice || product.price || 0)}
+                      </span>
+                      {product.salePrice && (
+                        <span className="text-[10px] line-through text-muted-foreground ml-1">
+                          ৳{Math.round(product.price)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <span className="text-muted-foreground">Stock: </span>
+                      <span className={`font-bold ${totalStock <= 5 ? 'text-destructive' : 'text-foreground'}`}>
+                        {totalStock} pcs
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Variants Summary if any */}
+                  {hasVariants && (
+                    <div className="space-y-1 pt-1 border-t border-dashed">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground font-medium">{product.variants!.length} Variants:</span>
+                        <button
+                          onClick={() => setExpandedRow(isExpanded ? null : product._id)}
+                          className="text-primary font-semibold flex items-center gap-0.5"
+                        >
+                          {isExpanded ? 'Hide' : 'Show All'}
+                          {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                        </button>
+                      </div>
+
+                      {isExpanded ? (
+                        <div className="grid grid-cols-2 gap-1.5 pt-1">
+                          {product.variants!.map((v: any, vIdx: number) => (
+                            <div key={vIdx} className="bg-muted/40 p-1.5 rounded border text-[10px] flex justify-between">
+                              <span>{v.color || ''} {v.size ? `(${v.size})` : ''}</span>
+                              <span className="font-bold">{v.stock || 0} pcs</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {product.variants!.slice(0, 3).map((v: any, idx: number) => (
+                            <span key={idx} className="text-[10px] bg-muted px-1.5 py-0.2 rounded text-muted-foreground">
+                              {v.color || ''}{v.color && v.size ? '/' : ''}{v.size || ''}: <b>{v.stock || 0}</b>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Card Bottom Actions */}
+                  <div className="flex items-center justify-between pt-2 border-t gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant={product.isPublished ? 'default' : 'secondary'} className="text-[10px]">
+                        {product.isPublished ? 'Published' : 'Draft/Hidden'}
+                      </Badge>
+                      {product.uploadedBy && (
+                        <span className="text-[10px] text-muted-foreground italic">
+                          (Reseller)
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {product.uploadedBy ? (
+                        <>
+                          {!product.isMotherProduct ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 border-emerald-500/30 gap-1"
+                              onClick={() => openAddToMotherModal(product)}
+                            >
+                              <PackagePlus className="h-3.5 w-3.5" /> +Mother
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs font-semibold text-amber-600 dark:text-amber-400 border-amber-500/30 gap-1"
+                              onClick={() => handleRemoveFromMother(product)}
+                            >
+                              <EyeOff className="h-3.5 w-3.5" /> -Mother
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-muted-foreground"
+                            asChild
+                          >
+                            <Link href={`/product/${product.slug}`} target="_blank">
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </Link>
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-primary font-semibold"
+                            onClick={() => openAddStockModal(product)}
+                          >
+                            <PackagePlus className="h-3.5 w-3.5 mr-1" /> +Stock
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => router.push(`/admin/products/${product._id}/edit`)}
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10"
+                            onClick={() => handleDelete(product._id)}
+                          >
+                            <Trash className="h-3.5 w-3.5" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+      
+      {!loading && pagination.totalPages > 1 && (
+        <div className="py-4">
+          <Pagination 
+            currentPage={currentPage}
+            totalPages={pagination.totalPages}
+            onPageChange={(page) => {
+              setCurrentPage(page);
+              fetchProducts(undefined, page);
+              const params = new URLSearchParams(searchParams.toString());
+              params.set('page', page.toString());
+              router.push(`?${params.toString()}`);
+            }}
+          />
+        </div>
+      )}
+
+      {/* Add Stock Modal */}
+      <Dialog open={addStockModalOpen} onOpenChange={setAddStockModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PackagePlus className="h-5 w-5 text-primary" />
+              Add Stock: {selectedProduct?.name}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="space-y-1">
+                <Label className="text-xs">Batch Number</Label>
+                <Input
+                  value={batchNumber}
+                  onChange={(e) => setBatchNumber(e.target.value)}
+                  className="h-8 text-xs font-mono"
+                  placeholder="e.g. BATCH-2026-01"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Expiry Date (Optional)</Label>
+                <Input
+                  type="date"
+                  value={expiryDate}
+                  onChange={(e) => setExpiryDate(e.target.value)}
+                  className="h-8 text-xs"
+                />
+              </div>
+            </div>
+
+            {selectedProduct?.variants && selectedProduct.variants.length > 0 ? (
+              <div className="space-y-2 border-t pt-2">
+                <Label className="text-xs font-bold text-foreground">Add Quantity per Variant (কালার/সাইজ অনুযায়ী স্টক যোগ করুন)</Label>
+                <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                  {selectedProduct.variants.map((v: any) => {
+                    const key = v._id || `${v.color}-${v.size}`;
+                    return (
+                      <div key={key} className="flex items-center justify-between gap-2 p-2 border rounded-md bg-muted/20 text-xs">
+                        <div>
+                          <div className="font-bold text-foreground">{v.color || 'Variant'} {v.size ? `(${v.size})` : ''}</div>
+                          <div className="text-[11px] text-muted-foreground">Current Stock: {v.stock || 0} pcs</div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs font-bold">+</span>
+                          <Input
+                            type="number"
+                            min="0"
+                            value={variantStockUpdates[key] || 0}
+                            onChange={(e) => {
+                              const val = Math.max(0, parseInt(e.target.value) || 0);
+                              setVariantStockUpdates(prev => ({ ...prev, [key]: val }));
+                            }}
+                            className="h-8 w-20 text-right text-xs"
+                          />
+                          <span className="text-[11px] text-muted-foreground">pcs</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2 border-t pt-2">
+                <Label className="text-xs font-bold">Quantity to Add (যোগ করার পরিমাণ)</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    value={stockToAddTopLevel}
+                    onChange={(e) => setStockToAddTopLevel(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="h-9 text-xs"
+                    placeholder="Enter stock quantity to add"
+                  />
+                  <span className="text-xs text-muted-foreground">pcs</span>
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  Current Stock: {selectedProduct?.stock || 0} pcs
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setAddStockModalOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={handleSaveStock} disabled={submittingStock} className="font-bold">
+              {submittingStock ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+              Confirm & Add Stock
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Reseller Product to Mother Shop Dialog */}
+      {(() => {
+        const resellerCost = selectedResellerProduct
+          ? (selectedResellerProduct.resellerPrice || selectedResellerProduct.purchasePrice || selectedResellerProduct.price || 0)
+          : 0;
+        const sellingNum = parseFloat(motherSellingPrice) || 0;
+        const motherProfit = sellingNum > resellerCost ? Math.round(sellingNum - resellerCost) : 0;
+
+        return (
+          <Dialog open={addToMotherModalOpen} onOpenChange={setAddToMotherModalOpen}>
+            <DialogContent className="max-w-md rounded-xl">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Store className="h-5 w-5 text-primary" />
+                  <span>Add to Mother Shop</span>
+                </DialogTitle>
+                <DialogDescription>
+                  Set your customer selling price for the Mother Shop.
+                </DialogDescription>
+              </DialogHeader>
+
+              {selectedResellerProduct && (
+                <div className="space-y-4 py-2">
+                  {/* Product preview */}
+                  <div className="flex gap-3 items-center border p-3 rounded-lg bg-muted/20">
+                    <div className="h-14 w-14 bg-muted relative rounded-md overflow-hidden border shrink-0">
+                      {selectedResellerProduct.images?.[0] ? (
+                        <Image
+                          src={selectedResellerProduct.images[0]}
+                          alt={selectedResellerProduct.name}
+                          fill
+                          className="object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center">
+                          <Store className="h-6 w-6 text-muted-foreground" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-bold text-sm line-clamp-1">{selectedResellerProduct.name}</p>
+                      <p className="text-[11px] text-muted-foreground font-mono">SKU: {selectedResellerProduct.sku || '-'}</p>
+                      <Badge className="text-[9px] mt-1 bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-300/40">
+                        Reseller: {selectedResellerProduct.uploadedBy?.storeName || 'Reseller'}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  {/* Cost / Profit display */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="border p-3 rounded-lg text-center bg-muted/40">
+                      <span className="text-[10px] text-muted-foreground block uppercase font-bold">Reseller Cost</span>
+                      <span className="text-lg font-black text-foreground">
+                        ৳{resellerCost.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className={`border p-3 rounded-lg text-center ${motherProfit > 0 ? 'bg-green-500/10 border-green-500/20' : 'bg-muted/40'}`}>
+                      <span className={`text-[10px] block uppercase font-bold ${motherProfit > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
+                        Mother Profit
+                      </span>
+                      <span className={`text-lg font-black ${motherProfit > 0 ? 'text-green-600' : 'text-foreground'}`}>
+                        ৳{motherProfit.toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Price input */}
+                  <div className="space-y-1">
+                    <Label htmlFor="mother-price" className="font-bold text-xs">
+                      Mother Shop Selling Price (৳)
+                    </Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-muted-foreground text-sm font-bold">৳</span>
+                      <Input
+                        id="mother-price"
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="Enter selling price"
+                        value={motherSellingPrice}
+                        onChange={(e) => setMotherSellingPrice(e.target.value)}
+                        className="pl-7 h-10 text-sm font-extrabold"
+                      />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {motherProfit > 0
+                        ? `Estimated profit per sale: ৳${motherProfit.toLocaleString()}`
+                        : 'Price must be equal to or higher than reseller cost'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setAddToMotherModalOpen(false)}
+                  disabled={submittingToMother}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleConfirmAddToMother}
+                  disabled={submittingToMother || !motherSellingPrice}
+                  className="font-bold"
+                >
+                  {submittingToMother ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Adding...
+                    </>
+                  ) : (
+                    <>
+                      <Store className="mr-2 h-4 w-4" /> Add to Mother Shop
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
+    </div>
+  );
+}
+
+export default function AdminProductsPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex h-[80vh] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    }>
+      <ProductsContent />
+    </Suspense>
+  );
+}
