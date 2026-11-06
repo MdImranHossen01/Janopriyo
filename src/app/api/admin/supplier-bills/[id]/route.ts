@@ -54,7 +54,7 @@ export async function PUT(
     }
 
     const body = await req.json();
-    const { items, discount, paidAmount, paymentMethod, expectedPaymentDate, date } = body;
+    const { items, discount, paidAmount, paymentMethod, paymentAccountId, expectedPaymentDate, date } = body;
 
     await connectToDatabase();
 
@@ -64,6 +64,7 @@ export async function PUT(
     }
 
     const oldDueAmount = existingBill.dueAmount || 0;
+    const oldPaidAmount = existingBill.paidAmount || 0;
 
     if (items && Array.isArray(items)) {
       existingBill.items = items.map((it: any) => ({
@@ -88,8 +89,17 @@ export async function PUT(
     existingBill.status = existingBill.dueAmount === 0 ? 'Paid' : 'Due';
 
     if (paymentMethod !== undefined) existingBill.paymentMethod = paymentMethod;
+    if (paymentAccountId !== undefined) existingBill.paymentAccountId = paymentAccountId || undefined;
     if (expectedPaymentDate !== undefined) existingBill.expectedPaymentDate = expectedPaymentDate ? new Date(expectedPaymentDate) : undefined;
-    if (date !== undefined) existingBill.date = date ? new Date(date) : existingBill.date;
+    if (date !== undefined) {
+      if (date) {
+        const parsed = new Date(date);
+        const now = new Date();
+        existingBill.date = parsed.toDateString() === now.toDateString() ? now : parsed;
+      } else {
+        existingBill.date = existingBill.date;
+      }
+    }
 
     await existingBill.save();
 
@@ -101,9 +111,66 @@ export async function PUT(
       });
     }
 
+    // If payment amount increased, log transaction to Ledger
+    const paymentDifference = (existingBill.paidAmount || 0) - oldPaidAmount;
+    if (paymentDifference > 0) {
+      try {
+        const LedgerAccount = (await import('@/models/LedgerAccount')).default;
+        const LedgerTransaction = (await import('@/models/LedgerTransaction')).default;
+        const targetAccountId = paymentAccountId || existingBill.paymentAccountId;
+
+        const account = targetAccountId
+          ? await LedgerAccount.findById(targetAccountId)
+          : (await LedgerAccount.findOne({ isDefault: true }) || await LedgerAccount.findOne({ code: 'CASH' }));
+
+        if (account) {
+          const balanceAfter = (account.currentBalance || 0) - paymentDifference;
+          account.currentBalance = balanceAfter;
+          await account.save();
+
+          await LedgerTransaction.create({
+            account: account._id,
+            date: date ? new Date(date) : new Date(),
+            description: `Payment for Purchase Bill ${existingBill.billNo} (${paymentMethod || existingBill.paymentMethod || 'Cash'})`,
+            type: 'debit',
+            amount: paymentDifference,
+            reference: existingBill.billNo,
+            balanceAfter
+          });
+
+          // Log expense into Expense collection for /admin/expenses-incomes and daily/monthly reports
+          try {
+            const Expense = (await import('@/models/Expense')).default;
+            await Expense.create({
+              title: `Purchase Bill Payment - ${existingBill.billNo}`,
+              amount: paymentDifference,
+              category: 'Others Expense',
+              type: 'expense',
+              paymentAccountId: account._id,
+              date: date ? new Date(date) : new Date(),
+              reference: existingBill.billNo,
+              description: `Payment for Purchase Bill ${existingBill.billNo}`
+            });
+          } catch (expErr) {
+            console.error('Error logging payment difference to Expense collection:', expErr);
+          }
+        }
+      } catch (ledgerErr) {
+        console.error('[SupplierBill Ledger Error]', ledgerErr);
+      }
+    }
+
     const updated = await SupplierBill.findById(id)
       .populate('supplier', 'name companyName phone email address')
       .populate('paymentAccountId', 'accountName accountType');
+
+    // Sync to Accounts Payable in ledger
+    try {
+      const { syncPayablesToLedger } = await import('@/lib/ledgerHelper');
+      await syncPayablesToLedger();
+    } catch (syncErr) {
+      console.error('[SupplierBill Sync Error]', syncErr);
+    }
 
     return NextResponse.json(updated);
   } catch (error: any) {
@@ -161,7 +228,32 @@ export async function DELETE(
       console.error('Error removing ledger entries for supplier bill:', err);
     }
 
+    // Clean associated Expense entries for this supplier bill
+    try {
+      const Expense = (await import('@/models/Expense')).default;
+      const billRef = (bill as any).billNo || (bill as any).invoiceNo;
+      if (billRef) {
+        await Expense.deleteMany({
+          $or: [
+            { reference: billRef },
+            { title: { $regex: billRef, $options: 'i' } },
+            { description: { $regex: billRef, $options: 'i' } }
+          ]
+        });
+      }
+    } catch (err) {
+      console.error('Error removing expense entries for supplier bill:', err);
+    }
+
     await SupplierBill.findByIdAndDelete(id);
+
+    // Sync to Accounts Payable in ledger
+    try {
+      const { syncPayablesToLedger } = await import('@/lib/ledgerHelper');
+      await syncPayablesToLedger();
+    } catch (syncErr) {
+      console.error('[SupplierBill Sync Error]', syncErr);
+    }
 
     return NextResponse.json({ message: 'Supplier bill deleted successfully' });
   } catch (error: any) {

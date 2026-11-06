@@ -46,7 +46,7 @@ export async function GET(
       })
       .populate({
         path: 'items.productId',
-        select: 'name uploadedBy isMotherProduct image retailPrice price',
+        select: 'name slug uploadedBy isMotherProduct image retailPrice price',
         populate: {
           path: 'uploadedBy',
           select: 'storeName subdomain customDomain'
@@ -248,6 +248,7 @@ export async function PATCH(
     if (!order) {
       return NextResponse.json({ message: 'Order not found' }, { status: 404 });
     }
+    const previousOrderStatus = order.status;
 
     const allowedStatuses = ['Order Placed', 'Confirmed', 'Hold', 'Ready for Delivery', 'Released for Delivery', 'Cancelled'];
 
@@ -472,7 +473,70 @@ export async function PATCH(
       if (status) motherUpdate.status = status;
       if (paymentStatus) motherUpdate.paymentStatus = paymentStatus;
       
+      const existingMother = await Order.findById(order.motherOrderId).select('status').lean() as any;
+      const previousMotherStatus = existingMother?.status;
       const updatedMother = await Order.findByIdAndUpdate(order.motherOrderId, { $set: motherUpdate }, { new: true });
+
+      // Also sync status across all sibling ResellerOrders (storefront + supplier fulfillment) so status stays unified
+      if (status) {
+        await ResellerOrder.updateMany(
+          { motherOrderId: order.motherOrderId, _id: { $ne: order._id } },
+          { $set: { status } }
+        );
+      }
+
+      // Send Email 2 (Order Confirmed) or Email 3 (Order Delivered) to Customer (Strictly ONCE, always under Storefront Seller / Mother Shop identity)
+      const statusJustChanged = status && status !== previousOrderStatus && status !== previousMotherStatus;
+      if (statusJustChanged && (status === 'Confirmed' || status === 'Delivered')) {
+        const customerEmail = updatedMother?.shippingAddress?.email || order.customer?.email;
+        if (customerEmail && !customerEmail.endsWith('@store.com') && !customerEmail.endsWith('@guest.com')) {
+          try {
+            const { sendCustomerOrderConfirmedEmail, sendCustomerOrderDeliveredEmail } = await import('@/lib/mail');
+            const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com';
+            let storeName: string | undefined = undefined;
+            let storeUrl: string | undefined = undefined;
+
+            // Determine the selling storefront (never expose supplier/source reseller identity)
+            if (updatedMother?.orderSource !== 'mother') {
+              const storefrontResellerId = updatedMother?.storefrontResellerId || (!order.shortId?.includes('-F') && !order.shortId?.includes('-M') ? order.resellerId : null);
+              if (storefrontResellerId) {
+                const sfReseller = await Reseller.findById(storefrontResellerId).select('storeName subdomain customDomain').lean() as any;
+                if (sfReseller) {
+                  storeName = sfReseller.storeName || sfReseller.subdomain;
+                  storeUrl = sfReseller.customDomain ? `https://${sfReseller.customDomain}` : `https://${sfReseller.subdomain}.${rootDomain}`;
+                }
+              }
+            }
+
+            const targetShortId = updatedMother?.shortId || order.shortId?.replace(/-[FM]\d+$/, '') || order._id.toString().slice(-8).toUpperCase();
+            const targetTotal = updatedMother?.totalAmount || order.totalAmount || 0;
+
+            if (status === 'Confirmed') {
+              sendCustomerOrderConfirmedEmail({
+                email: customerEmail,
+                customerName: updatedMother?.shippingAddress?.fullName || order.customer?.name || 'Customer',
+                shortId: targetShortId,
+                totalAmount: targetTotal,
+                storeName,
+                storeUrl,
+                trackingCode: updatedMother?.shippingDetails?.trackingId || order.shippingDetails?.trackingId || order.shippingDetails?.consignmentId,
+                courierName: updatedMother?.shippingDetails?.courierName || order.shippingDetails?.courierName,
+              }).catch(err => console.error('[Reseller Order Confirmed Mail Error]', err));
+            } else if (status === 'Delivered') {
+              sendCustomerOrderDeliveredEmail({
+                email: customerEmail,
+                customerName: updatedMother?.shippingAddress?.fullName || order.customer?.name || 'Customer',
+                shortId: targetShortId,
+                totalAmount: targetTotal,
+                storeName,
+                storeUrl,
+              }).catch(err => console.error('[Reseller Order Delivered Mail Error]', err));
+            }
+          } catch (mailStatusErr) {
+            console.error('[Reseller Order Status Mail Error]', mailStatusErr);
+          }
+        }
+      }
 
       // Handle product sales counting on Mother Order
       const targetStatus = status || updatedMother?.status || order.status;
@@ -503,19 +567,35 @@ export async function PATCH(
             });
           }
 
-          const { syncResellerCommissionForMotherOrder } = await import('@/lib/resellerCommissionSync');
-          await syncResellerCommissionForMotherOrder({
-            motherOrderId: order.motherOrderId,
-            newStatus: status,
-            newPaymentStatus: paymentStatus,
-          });
+          if (order.motherOrderId) {
+            const { syncResellerCommissionForMotherOrder } = await import('@/lib/resellerCommissionSync');
+            await syncResellerCommissionForMotherOrder({
+              motherOrderId: order.motherOrderId,
+              newStatus: status,
+              newPaymentStatus: paymentStatus,
+            });
+          } else if (status === 'Cancelled') {
+            const ResellerWalletTransaction = (await import('@/models/ResellerWalletTransaction')).default;
+            await ResellerWalletTransaction.updateMany(
+              { orderId: order._id, type: 'commission_earned', status: { $ne: 'cancelled' } },
+              { $set: { status: 'cancelled' } }
+            );
+            const pendingAgg = await ResellerWalletTransaction.aggregate([
+              { $match: { resellerId: reseller._id, type: 'commission_earned', status: 'pending' } },
+              { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]);
+            const accuratePending = Math.max(0, pendingAgg[0]?.total || 0);
+            await Reseller.findByIdAndUpdate(reseller._id, { $set: { pendingBalance: accuratePending } });
+          }
 
-          const { default: LedgerTransaction } = await import('@/models/LedgerTransaction');
-          const { recalculateLedgerBalance } = await import('@/lib/ledgerHelper');
-          const shortId = order.motherOrderId.toString().slice(-8).toUpperCase();
-          await LedgerTransaction.deleteMany({ reference: `ORDER-${shortId}` });
-          await recalculateLedgerBalance('CASH');
-          await recalculateLedgerBalance('BANK');
+          if (order.motherOrderId) {
+            const { default: LedgerTransaction } = await import('@/models/LedgerTransaction');
+            const { recalculateLedgerBalance } = await import('@/lib/ledgerHelper');
+            const shortId = order.motherOrderId.toString().slice(-8).toUpperCase();
+            await LedgerTransaction.deleteMany({ reference: `ORDER-${shortId}` });
+            await recalculateLedgerBalance('CASH');
+            await recalculateLedgerBalance('BANK');
+          }
         } catch (syncErr) {
           console.error('[Reseller Order Cancel Sync Error]', syncErr);
         }

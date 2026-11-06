@@ -221,7 +221,7 @@ export default function ProductDetailsV4Client({ product }: ProductDetailsV4Clie
       {/* Serenity Gallery */}
       <div className="space-y-6">
         <div className="bg-neutral-50 dark:bg-neutral-900 rounded-[3rem] p-6 shadow-sm">
-          <ProductImageGallery images={allImages} />
+          <ProductImageGallery images={allImages} videoUrl={product.videoUrl} title={product.name} />
         </div>
         <div className="flex items-center justify-center gap-12 pt-4">
           <div className="flex flex-col items-center gap-2">
@@ -272,7 +272,7 @@ export default function ProductDetailsV4Client({ product }: ProductDetailsV4Clie
           <div className="flex items-center gap-6">
             <div className="flex items-baseline gap-3">
               <span className="text-4xl font-black">{CURRENCY_SYMBOL}{Math.round(displaySalePrice || displayPrice)}</span>
-              {displaySalePrice && displaySalePrice !== displayPrice && <span className="text-xl text-muted-foreground line-through opacity-40 font-medium">{CURRENCY_SYMBOL}{Math.round(displayPrice)}</span>}
+              {displaySalePrice && displayPrice > displaySalePrice && <span className="text-xl text-muted-foreground line-through opacity-40 font-medium">{CURRENCY_SYMBOL}{Math.round(displayPrice)}</span>}
             </div>
             {discount > 0 && <Badge variant="outline" className="rounded-full border-primary text-primary px-4 py-1 font-black text-[10px] uppercase tracking-widest">Saving {discount}%</Badge>}
           </div>

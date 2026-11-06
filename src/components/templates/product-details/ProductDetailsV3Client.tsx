@@ -5,7 +5,10 @@ import { useState, useMemo, useEffect } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { ShoppingCart, Heart, Share2, Minus, Plus, LayoutDashboard, Settings, Trash2 } from 'lucide-react';
+import { ShoppingCart, Heart, Share2, Minus, Plus, LayoutDashboard, Settings, Trash2, Loader2 } from 'lucide-react';
+import { Suspense } from 'react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import ReviewsSection from '@/components/storefront/ReviewsSection';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
@@ -22,6 +25,7 @@ import Swal from 'sweetalert2';
 import { generateHtml } from '@/lib/server-html';
 import ShareDialog from '@/components/storefront/ShareDialog';
 import { validateAndAddToCart } from '@/lib/cart-seller';
+import ProductVideoThumbnailModal from '@/components/storefront/ProductVideoThumbnailModal';
 
 interface ProductDetailsV3ClientProps {
   product: any;
@@ -221,6 +225,12 @@ export default function ProductDetailsV3Client({ product }: ProductDetailsV3Clie
             </div>
 
             <div className="grid grid-cols-4 gap-4">
+              <ProductVideoThumbnailModal
+                videoUrl={product.videoUrl}
+                thumbnailImage={allImages?.[0]}
+                className="relative aspect-square rounded-2xl overflow-hidden cursor-pointer"
+                title={product.name}
+              />
               {allImages?.map((img: string, i: number) => (
                 <div
                   key={i}
@@ -246,7 +256,7 @@ export default function ProductDetailsV3Client({ product }: ProductDetailsV3Clie
                   <span className="text-[8px] font-mono text-muted-foreground uppercase mb-1">Base_Val</span>
                   <span className="text-4xl font-black">৳{Math.round(displaySalePrice || displayPrice)}</span>
                 </div>
-                {displaySalePrice && displaySalePrice !== displayPrice && (
+                {displaySalePrice && displayPrice > displaySalePrice && (
                   <div className="flex flex-col">
                     <span className="text-[8px] font-mono text-muted-foreground uppercase mb-1">Prev_Val</span>
                     <span className="text-2xl font-bold text-muted-foreground line-through opacity-30">৳{Math.round(displayPrice)}</span>
@@ -354,10 +364,35 @@ export default function ProductDetailsV3Client({ product }: ProductDetailsV3Clie
                   <p className="text-xs font-bold uppercase tracking-tighter italic">Boutique Atelier_01</p>
                 </div>
               </div>
-              <div
-                className="ProseMirror max-w-none text-muted-foreground"
-                dangerouslySetInnerHTML={{ __html: generateHtml(product.description) }}
-              />
+              <Tabs defaultValue="description" className="w-full">
+                <TabsList className="w-full justify-start rounded-none border-b bg-transparent p-0 mb-6 h-auto">
+                  <TabsTrigger
+                    value="description"
+                    className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3 font-mono font-bold uppercase tracking-wider text-xs text-muted-foreground data-[state=active]:text-foreground"
+                  >
+                    Description
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="reviews"
+                    className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3 font-mono font-bold uppercase tracking-wider text-xs text-muted-foreground data-[state=active]:text-foreground"
+                  >
+                    Reviews ({product.numReviews || 0})
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="description" className="animate-in fade-in-50 duration-500">
+                  <div
+                    className="ProseMirror max-w-none text-muted-foreground"
+                    dangerouslySetInnerHTML={{ __html: generateHtml(product.description) }}
+                  />
+                </TabsContent>
+
+                <TabsContent value="reviews" className="animate-in fade-in-50 duration-500">
+                  <Suspense fallback={<div className="flex justify-center p-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}>
+                    <ReviewsSection productId={product._id} />
+                  </Suspense>
+                </TabsContent>
+              </Tabs>
             </div>
           </div>
         </div>

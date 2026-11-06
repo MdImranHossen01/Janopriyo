@@ -22,6 +22,7 @@ export interface IOrder extends Document {
   shippingAddress: {
     fullName: string;
     phone: string;
+    email?: string;
     street: string;
     city: string;
     state: string;
@@ -70,6 +71,8 @@ export interface IOrder extends Document {
   systemFee?: number;
   salesProfit?: number;
   commissionStatus?: 'pending' | 'cleared' | 'cancelled';
+  courierReturnLossDeducted?: boolean;
+  courierReturnLossAmount?: number;
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -99,6 +102,7 @@ const OrderSchema: Schema<IOrder> = new Schema(
       type: {
         fullName: { type: String, required: true },
         phone: { type: String, required: true },
+        email: { type: String, required: false },
         street: { type: String, required: true },
         city: { type: String, required: true },
         state: { type: String, required: true },
@@ -153,6 +157,8 @@ const OrderSchema: Schema<IOrder> = new Schema(
     systemFee: { type: Number, default: 0, min: 0 },
     salesProfit: { type: Number, default: 0 },
     commissionStatus: { type: String, enum: ['pending', 'cleared', 'cancelled'], default: undefined },
+    courierReturnLossDeducted: { type: Boolean, default: false },
+    courierReturnLossAmount: { type: Number, default: 0 },
     deletedAt: { type: Date, default: null, index: true },
   },
   { timestamps: true }

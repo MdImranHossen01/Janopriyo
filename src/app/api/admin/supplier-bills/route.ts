@@ -53,7 +53,8 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      supplier,
+      supplierId,
+      supplier: directSupplier,
       date,
       items,
       discount = 0,
@@ -64,6 +65,8 @@ export async function POST(req: NextRequest) {
       expectedPaymentDate,
       paymentAccountId
     } = body;
+
+    const supplier = supplierId || directSupplier;
 
     if (!supplier || !items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ message: 'Supplier and bill items are required' }, { status: 400 });
@@ -87,10 +90,21 @@ export async function POST(req: NextRequest) {
     const dueAmount = Math.max(0, calculatedTotal - finalPaid);
     const status = dueAmount === 0 ? 'Paid' : 'Due';
 
+    let finalBillDate = new Date();
+    if (date) {
+      const parsed = new Date(date);
+      const now = new Date();
+      if (parsed.toDateString() === now.toDateString()) {
+        finalBillDate = now;
+      } else {
+        finalBillDate = parsed;
+      }
+    }
+
     const newBill = await SupplierBill.create({
       billNo,
       supplier,
-      date: date ? new Date(date) : new Date(),
+      date: finalBillDate,
       items: items.map((it: any) => ({
         name: it.name.trim(),
         quantity: Number(it.quantity) || 1,
@@ -125,13 +139,30 @@ export async function POST(req: NextRequest) {
 
           await LedgerTransaction.create({
             account: account._id,
-            date: date ? new Date(date) : new Date(),
+            date: finalBillDate,
             description: `Purchase Bill ${billNo} Payment to ${supplierDoc.name} (${paymentMethod})`,
             type: 'debit',
             amount: finalPaid,
-            reference: `SupplierBill:${newBill._id}`,
+            reference: billNo,
             balanceAfter
           });
+
+          // Log expense into Expense collection for /admin/expenses-incomes and daily/monthly reports
+          try {
+            const Expense = (await import('@/models/Expense')).default;
+            await Expense.create({
+              title: `Purchase Bill Payment - ${billNo}`,
+              amount: finalPaid,
+              category: 'Others Expense',
+              type: 'expense',
+              paymentAccountId: account._id,
+              date: finalBillDate,
+              reference: billNo,
+              description: `Payment for Purchase Bill ${billNo} to supplier ${supplierDoc.name}`
+            });
+          } catch (expErr) {
+            console.error('Error logging purchase bill payment to Expense collection:', expErr);
+          }
         }
       } catch (ledgerErr) {
         console.error('[Ledger SupplierBill Log Error]', ledgerErr);
@@ -141,6 +172,14 @@ export async function POST(req: NextRequest) {
     const populated = await SupplierBill.findById(newBill._id)
       .populate('supplier', 'name companyName phone email address')
       .populate('paymentAccountId', 'accountName accountType');
+
+    // Sync to Accounts Payable in ledger
+    try {
+      const { syncPayablesToLedger } = await import('@/lib/ledgerHelper');
+      await syncPayablesToLedger();
+    } catch (syncErr) {
+      console.error('[SupplierBill Sync Error]', syncErr);
+    }
 
     return NextResponse.json(populated, { status: 201 });
   } catch (error: any) {

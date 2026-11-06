@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
     const {
       clientName,
       clientPhone,
+      clientEmail,
       clientAddress,
       items,
       subtotal,
@@ -63,6 +64,9 @@ export async function POST(req: NextRequest) {
       currentBillDue,
       status,
       expectedReceivableDate,
+      expectedDeliveryDate,
+      termsAndConditions,
+      vatTaxIncluded,
       documentType,
       convertedFrom
     } = body;
@@ -100,6 +104,7 @@ export async function POST(req: NextRequest) {
     const newBill = new Bill({
       clientName,
       clientPhone,
+      clientEmail: clientEmail || undefined,
       clientAddress,
       invoiceNo,
       items,
@@ -116,6 +121,9 @@ export async function POST(req: NextRequest) {
       currentBillDue,
       status,
       expectedReceivableDate: status === 'Due' && expectedReceivableDate ? new Date(expectedReceivableDate) : undefined,
+      expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : undefined,
+      termsAndConditions: termsAndConditions || undefined,
+      vatTaxIncluded: vatTaxIncluded !== undefined ? Boolean(vatTaxIncluded) : true,
       documentType: docType,
       convertedFrom: convertedFrom || undefined
     });
@@ -154,6 +162,22 @@ export async function POST(req: NextRequest) {
             `Upfront payment credit for Bill ${invoiceNo}`,
             invoiceNo
           );
+
+          // Log income into Expense collection for /admin/expenses-incomes and financial reports
+          try {
+            const Expense = (await import('@/models/Expense')).default;
+            await Expense.create({
+              title: `Bill Revenue #${invoiceNo}`,
+              amount: cashIn,
+              category: 'Sales Revenue',
+              type: 'income',
+              date: newBill.date || new Date(),
+              reference: invoiceNo,
+              description: `Payment received for Bill ${invoiceNo} from ${clientName}`
+            });
+          } catch (expErr) {
+            console.error('Error logging bill upfront payment to Expense collection:', expErr);
+          }
         }
       } catch (err) {
         console.error('Error logging to ledger:', err);

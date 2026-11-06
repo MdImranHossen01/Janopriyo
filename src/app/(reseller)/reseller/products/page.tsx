@@ -13,6 +13,7 @@ import {
 import {
   Plus, Edit, Trash, Loader2, Search, Package, RefreshCw,
   MoreHorizontal, ChevronDown, ChevronRight, PackagePlus, Store,
+  Layers, CheckCircle2, Clock, Eye, EyeOff
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -31,6 +32,8 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 
+type ResellerTabType = 'all' | 'approved' | 'pending' | 'published' | 'draft';
+
 function calculateCumulativeStock(product: any): number {
   if (product.variants && product.variants.length > 0) {
     return product.variants.reduce((sum: number, v: any) => sum + (v.stock || 0), 0);
@@ -39,16 +42,22 @@ function calculateCumulativeStock(product: any): number {
 }
 
 function ProductsContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialTab = (searchParams.get('tab') as ResellerTabType) || 'all';
+
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const [activeTab, setActiveTab] = useState<ResellerTabType>(initialTab);
+  const [counts, setCounts] = useState({ all: 0, approved: 0, pending: 0, published: 0, draft: 0 });
   const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1'));
   const [pagination, setPagination] = useState({ total: 0, totalPages: 1 });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [togglingPublishId, setTogglingPublishId] = useState<string | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Add Stock Modal State
   const [addStockModalOpen, setAddStockModalOpen] = useState(false);
@@ -150,16 +159,19 @@ function ProductsContent() {
     }
   };
 
-  const fetchProducts = async (signal?: AbortSignal, page = currentPage) => {
+  const fetchProducts = async (signal?: AbortSignal, page = currentPage, tab = activeTab) => {
     try {
       setLoading(true);
-      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+      const params = new URLSearchParams({ page: String(page), limit: String(limit), tab });
       if (search) params.set('search', search);
       const res = await fetch(`/api/reseller/products?${params}`, { signal });
       if (!res.ok) { toast.error('Failed to fetch products'); return; }
       const d = await res.json();
       setProducts(d.products || []);
       setPagination(d.pagination || { total: 0, totalPages: 1 });
+      if (d.counts) {
+        setCounts(d.counts);
+      }
     } catch (err: any) {
       if (err.name === 'AbortError') return;
       toast.error('Failed to fetch products');
@@ -168,16 +180,23 @@ function ProductsContent() {
     }
   };
 
+  const handleTabChange = (tab: ResellerTabType) => {
+    setActiveTab(tab);
+    setCurrentPage(1);
+    router.push(`/reseller/products?tab=${tab}`);
+    fetchProducts(undefined, 1, tab);
+  };
+
   useEffect(() => {
     const controller = new AbortController();
-    fetchProducts(controller.signal, currentPage);
+    fetchProducts(controller.signal, currentPage, activeTab);
     return () => controller.abort();
   }, [currentPage]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setCurrentPage(1);
-    fetchProducts(undefined, 1);
+    fetchProducts(undefined, 1, activeTab);
   };
 
   const handleDelete = async (id: string, name: string) => {
@@ -193,20 +212,73 @@ function ProductsContent() {
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
       toast.success(data.message || 'Product removed');
-      fetchProducts();
+      fetchProducts(undefined, currentPage, activeTab);
     } else {
       toast.error(data.error || data.message || 'Failed to remove');
     }
   };
 
-  const togglePublish = async (id: string, current: boolean) => {
-    const res = await fetch(`/api/reseller/products`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, isPublished: !current }),
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    const result = await Swal.fire({
+      title: 'Delete Selected Products?',
+      text: `Are you sure you want to permanently delete ${selectedIds.length} selected product(s)? This action cannot be undone.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#ef4444',
+      confirmButtonText: `Yes, delete ${selectedIds.length} products!`,
+      cancelButtonText: 'Cancel',
+      customClass: { popup: 'rounded-xl', confirmButton: 'rounded-lg px-4 py-2 font-bold', cancelButton: 'rounded-lg px-4 py-2' },
     });
-    if (res.ok) { toast.success(`Product ${!current ? 'published' : 'unpublished'}`); fetchProducts(); }
-    else toast.error('Failed to update');
+    if (!result.isConfirmed) return;
+
+    try {
+      setIsBulkDeleting(true);
+      const res = await fetch(`/api/reseller/products`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedIds }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(data.message || `Deleted ${selectedIds.length} product(s) successfully`);
+        setSelectedIds([]);
+        fetchProducts(undefined, currentPage, activeTab);
+      } else {
+        toast.error(data.error || data.message || 'Failed to delete selected products');
+      }
+    } catch {
+      toast.error('Network error during bulk deletion');
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
+  const togglePublish = async (id: string, current: boolean) => {
+    if (togglingPublishId) return;
+    setTogglingPublishId(id);
+    const nextState = !current;
+    // Optimistic UI update
+    setProducts(prev => prev.map(p => p._id === id ? { ...p, isPublished: nextState } : p));
+    try {
+      const res = await fetch(`/api/reseller/products`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, isPublished: nextState }),
+      });
+      if (res.ok) {
+        toast.success(`Product ${nextState ? 'published' : 'moved to draft'}`);
+        fetchProducts(undefined, currentPage, activeTab);
+      } else {
+        setProducts(prev => prev.map(p => p._id === id ? { ...p, isPublished: current } : p));
+        toast.error('Failed to update product status');
+      }
+    } catch {
+      setProducts(prev => prev.map(p => p._id === id ? { ...p, isPublished: current } : p));
+      toast.error('An error occurred while updating status');
+    } finally {
+      setTogglingPublishId(null);
+    }
   };
 
   const syncOwnProducts = async () => {
@@ -216,7 +288,7 @@ function ProductsContent() {
       const data = await res.json();
       if (res.ok) {
         toast.success(`Synced ${data.synced} products to your store!`);
-        fetchProducts();
+        fetchProducts(undefined, currentPage, activeTab);
       } else {
         toast.error(data.error || 'Sync failed');
       }
@@ -241,7 +313,7 @@ function ProductsContent() {
 
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
-    router.push(`/reseller/products?page=${page}`);
+    router.push(`/reseller/products?page=${page}&tab=${activeTab}`);
   };
 
   return (
@@ -267,6 +339,118 @@ function ProductsContent() {
           </Link>
         </div>
       </div>
+
+      {/* Status Filter Tabs */}
+      <div className="flex flex-wrap items-center gap-2 border-b pb-2">
+        <Button
+          variant={activeTab === 'all' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8 text-xs font-semibold gap-1.5"
+          onClick={() => handleTabChange('all')}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span>All</span>
+          {counts.all > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px]">
+              {counts.all}
+            </Badge>
+          )}
+        </Button>
+        <Button
+          variant={activeTab === 'approved' ? 'default' : 'outline'}
+          size="sm"
+          className={`h-8 text-xs font-semibold gap-1.5 ${activeTab === 'approved' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10'}`}
+          onClick={() => handleTabChange('approved')}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          <span>Approved</span>
+          {counts.approved > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px]">
+              {counts.approved}
+            </Badge>
+          )}
+        </Button>
+        <Button
+          variant={activeTab === 'pending' ? 'default' : 'outline'}
+          size="sm"
+          className={`h-8 text-xs font-semibold gap-1.5 ${activeTab === 'pending' ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'border-amber-500/30 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10'}`}
+          onClick={() => handleTabChange('pending')}
+        >
+          <Clock className="h-3.5 w-3.5" />
+          <span>Pending Approval</span>
+          {counts.pending > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px]">
+              {counts.pending}
+            </Badge>
+          )}
+        </Button>
+        <Button
+          variant={activeTab === 'published' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8 text-xs font-semibold gap-1.5"
+          onClick={() => handleTabChange('published')}
+        >
+          <Eye className="h-3.5 w-3.5" />
+          <span>Published</span>
+          {counts.published > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px]">
+              {counts.published}
+            </Badge>
+          )}
+        </Button>
+        <Button
+          variant={activeTab === 'draft' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8 text-xs font-semibold gap-1.5"
+          onClick={() => handleTabChange('draft')}
+        >
+          <EyeOff className="h-3.5 w-3.5" />
+          <span>Draft</span>
+          {counts.draft > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px]">
+              {counts.draft}
+            </Badge>
+          )}
+        </Button>
+      </div>
+
+      {/* Bulk Action Bar */}
+      {selectedIds.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-destructive/10 border border-destructive/20 rounded-xl animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-2">
+            <Badge variant="destructive" className="text-xs px-2.5 py-0.5">
+              {selectedIds.length} Selected
+            </Badge>
+            <span className="text-xs text-muted-foreground font-medium">
+              Actions for selected products:
+            </span>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSelectedIds([])}
+              className="h-8 text-xs font-semibold"
+            >
+              Deselect All
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleBulkDelete}
+              disabled={isBulkDeleting}
+              className="h-8 text-xs font-bold gap-1.5"
+            >
+              {isBulkDeleting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash className="h-3.5 w-3.5" />
+              )}
+              Delete Selected ({selectedIds.length})
+            </Button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSearch} className="flex items-center gap-2">
         <div className="relative flex-1 max-w-sm">
@@ -300,7 +484,7 @@ function ProductsContent() {
                 <TableHead className="min-w-[140px] max-w-[200px]">Total Stock</TableHead>
                 <TableHead className="w-[70px] text-center">Views</TableHead>
                 <TableHead className="w-[70px] text-center">Sales</TableHead>
-                <TableHead className="w-[90px] text-center">Status</TableHead>
+                <TableHead className="w-[100px] text-center">Publish</TableHead>
                 <TableHead className="w-[80px] text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -384,6 +568,15 @@ function ProductsContent() {
                               ) : (
                                 <span className="text-[10px] text-muted-foreground">Admin</span>
                               )}
+                              {product.isApprovedByAdmin ? (
+                                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-800 font-semibold text-[10px] px-1.5 py-0">
+                                  Approved
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800 font-semibold text-[10px] px-1.5 py-0" title="Mother Shop approval required before selling">
+                                  Not Approved
+                                </Badge>
+                              )}
                             </div>
                           </div>
                         </TableCell>
@@ -436,12 +629,29 @@ function ProductsContent() {
                         <TableCell className="w-[70px] text-center whitespace-nowrap">
                           <span className="font-bold text-primary">{product.totalSales ?? 0}</span>
                         </TableCell>
-                        <TableCell className="w-[90px] text-center whitespace-nowrap">
-                          <button onClick={() => togglePublish(product._id, product.isPublished)} className="hover:opacity-80 transition-opacity">
-                            <Badge variant={product.isPublished ? 'default' : 'secondary'} className="cursor-pointer">
-                              {product.isPublished ? 'Published' : 'Draft'}
-                            </Badge>
-                          </button>
+                        <TableCell className="w-[100px] text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={Boolean(product.isPublished)}
+                              onClick={() => togglePublish(product._id, product.isPublished)}
+                              disabled={togglingPublishId === product._id}
+                              title={product.isPublished ? 'Published (Click to make Draft)' : 'Draft (Click to Publish)'}
+                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${
+                                product.isPublished
+                                  ? 'bg-emerald-600 border-emerald-600'
+                                  : 'bg-slate-300 dark:bg-neutral-700 border-slate-400 dark:border-neutral-500'
+                              } ${togglingPublishId === product._id ? 'opacity-50 cursor-wait' : ''}`}
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                  product.isPublished ? 'translate-x-5' : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
+                          </div>
                         </TableCell>
                         <TableCell className="w-[80px] text-right whitespace-nowrap">
                           <DropdownMenu>
@@ -515,9 +725,16 @@ function ProductsContent() {
             products.map(product => {
               const totalStock = calculateCumulativeStock(product);
               const hasVariants = product.variants && product.variants.length > 0;
+              const isSelected = selectedIds.includes(product._id);
               return (
-                <div key={product._id} className="p-3 bg-card border rounded-lg shadow-sm space-y-2">
+                <div key={product._id} className={`p-3 bg-card border rounded-lg shadow-sm space-y-2 transition-colors ${isSelected ? 'border-primary/50 bg-primary/5' : ''}`}>
                   <div className="flex items-start gap-2.5">
+                    <div className="pt-1">
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => toggleSelect(product._id)}
+                      />
+                    </div>
                     <div className="h-14 w-14 rounded-md border bg-muted overflow-hidden relative shrink-0">
                       {product.images?.[0] ? (
                         <Image src={product.images[0]} alt={product.name} fill className="object-cover" />
@@ -542,6 +759,15 @@ function ProductsContent() {
                         ) : (
                           <span className="text-[10px] text-muted-foreground">• Admin</span>
                         )}
+                        {product.isApprovedByAdmin ? (
+                          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-800 text-[10px] font-semibold px-1.5 py-0 shadow-none">
+                            Approved
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-800 text-[10px] font-semibold px-1.5 py-0 shadow-none">
+                            Not Approved
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-1.5 mt-0.5">
                         {product.salePrice && product.salePrice < product.price ? (
@@ -565,10 +791,25 @@ function ProductsContent() {
                           {product.variants.length} Var
                         </Badge>
                       )}
-                      <button onClick={() => togglePublish(product._id, product.isPublished)}>
-                        <Badge variant={product.isPublished ? 'default' : 'secondary'} className="cursor-pointer text-[10px] px-1.5 py-0">
-                          {product.isPublished ? 'Published' : 'Draft'}
-                        </Badge>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={Boolean(product.isPublished)}
+                        onClick={() => togglePublish(product._id, product.isPublished)}
+                        disabled={togglingPublishId === product._id}
+                        title={product.isPublished ? 'Published (Click to make Draft)' : 'Draft (Click to Publish)'}
+                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out ${
+                          product.isPublished
+                            ? 'bg-emerald-600 border-emerald-600'
+                            : 'bg-slate-300 dark:bg-neutral-700 border-slate-400 dark:border-neutral-500'
+                        } ${togglingPublishId === product._id ? 'opacity-50 cursor-wait' : ''}`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                            product.isPublished ? 'translate-x-4' : 'translate-x-0'
+                          }`}
+                        />
                       </button>
                     </div>
                     <div className="flex items-center gap-1">
@@ -699,6 +940,38 @@ function ProductsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Floating Sticky Bulk Action Bar for high visibility */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2.5 bg-background/95 backdrop-blur-md border border-border shadow-2xl rounded-full animate-in fade-in slide-in-from-bottom-5">
+          <Badge variant="destructive" className="text-xs px-2.5 py-0.5 rounded-full font-bold">
+            {selectedIds.length} Selected
+          </Badge>
+          <div className="h-4 w-px bg-border" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSelectedIds([])}
+            className="h-8 text-xs font-semibold px-2 hover:bg-muted rounded-full"
+          >
+            Deselect
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleBulkDelete}
+            disabled={isBulkDeleting}
+            className="h-8 text-xs font-bold gap-1.5 px-3.5 rounded-full shadow-md"
+          >
+            {isBulkDeleting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash className="h-3.5 w-3.5" />
+            )}
+            Delete Selected ({selectedIds.length})
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

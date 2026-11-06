@@ -31,6 +31,7 @@ import {
 import Image from 'next/image';
 import { generateHtml } from '@/lib/server-html';
 import ShareDialog from '@/components/storefront/ShareDialog';
+import ProductVideoThumbnailModal from '@/components/storefront/ProductVideoThumbnailModal';
 import { validateAndAddToCart } from '@/lib/cart-seller';
 
 const CURRENCY_SYMBOL = '৳';
@@ -204,6 +205,12 @@ export default function ProductDetailsV5Client({ product }: ProductDetailsV5Clie
         <div className="absolute inset-0 bg-black/10" />
 
         <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex gap-4 p-4 bg-white/10 backdrop-blur-3xl rounded-[2.5rem] border border-white/20 shadow-2xl">
+          <ProductVideoThumbnailModal
+            videoUrl={product.videoUrl}
+            thumbnailImage={allImages?.[0]}
+            className="relative h-20 w-20 rounded-2xl overflow-hidden cursor-pointer"
+            title={product.name}
+          />
           {allImages?.slice(0, 6).map((img: string, i: number) => (
             <button
               key={img}
@@ -241,7 +248,7 @@ export default function ProductDetailsV5Client({ product }: ProductDetailsV5Clie
             <h1 className="text-6xl md:text-8xl font-serif italic tracking-tighter leading-none">{product.name}</h1>
             <div className="flex items-baseline gap-6">
               <span className="text-5xl font-black">{CURRENCY_SYMBOL}{Math.round(displaySalePrice || displayPrice)}</span>
-              {displaySalePrice && displaySalePrice !== displayPrice && <span className="text-2xl text-muted-foreground line-through opacity-30 font-medium">{CURRENCY_SYMBOL}{Math.round(displayPrice)}</span>}
+              {displaySalePrice && displayPrice > displaySalePrice && <span className="text-2xl text-muted-foreground line-through opacity-30 font-medium">{CURRENCY_SYMBOL}{Math.round(displayPrice)}</span>}
               {discount > 0 && <Badge variant="outline" className="rounded-full border-primary text-primary px-4 py-1 font-black text-xs uppercase tracking-widest">Saving {discount}%</Badge>}
             </div>
           </div>

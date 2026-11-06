@@ -54,14 +54,13 @@ export async function GET(request: NextRequest) {
         for (const ro of resellerOrdersWithMother) {
           const mother = ro.motherOrderId ? motherMap.get(ro.motherOrderId.toString()) : null;
           if (mother && (ro.status !== mother.status || ro.paymentStatus !== mother.paymentStatus)) {
-            const syncUpdate: any = { status: mother.status, paymentStatus: mother.paymentStatus };
-            if (mother.status === 'Cancelled') {
-              syncUpdate.commissionStatus = 'cancelled';
-            } else if (mother.status === 'Delivered' || mother.status === 'Paid') {
-              syncUpdate.commissionStatus = 'cleared';
-            }
+            const { syncResellerCommissionForMotherOrder } = await import('@/lib/resellerCommissionSync');
             updatesToRun.push(
-              ResellerOrder.updateOne({ _id: ro._id }, { $set: syncUpdate })
+              syncResellerCommissionForMotherOrder({
+                motherOrderId: mother._id,
+                newStatus: mother.status,
+                newPaymentStatus: mother.paymentStatus,
+              })
             );
           }
         }
@@ -74,7 +73,16 @@ export async function GET(request: NextRequest) {
     }
 
     const query: Record<string, any> = { resellerId, deletedAt: null };
-    if (status) query.status = status;
+    if (status) {
+      if (status === 'Paid') {
+        query.$and = query.$and || [];
+        query.$and.push({
+          $or: [{ status: 'Paid' }, { paymentStatus: 'Paid' }]
+        });
+      } else {
+        query.status = status;
+      }
+    }
     if (commissionStatus && commissionStatus !== 'All') query.commissionStatus = commissionStatus;
     if (search) {
       const cleanSearch = search.trim();
@@ -90,7 +98,7 @@ export async function GET(request: NextRequest) {
       ];
     }
 
-    const [orders, total, statusAggregation] = await Promise.all([
+    const [orders, total, statusAggregation, paidOrdersCount] = await Promise.all([
       ResellerOrder.find(query)
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
@@ -112,18 +120,27 @@ export async function GET(request: NextRequest) {
         })
         .populate({
           path: 'items.productId',
-          select: 'name uploadedBy isMotherProduct',
+          select: 'name slug uploadedBy isMotherProduct',
           populate: {
             path: 'uploadedBy',
             select: 'storeName subdomain customDomain'
           }
+        })
+        .populate({
+          path: 'items.resellerProductId',
+          select: 'slug productId'
         })
         .lean(),
       ResellerOrder.countDocuments(query),
       ResellerOrder.aggregate([
         { $match: { resellerId, deletedAt: null } },
         { $group: { _id: "$status", count: { $sum: 1 } } }
-      ])
+      ]),
+      ResellerOrder.countDocuments({
+        resellerId,
+        deletedAt: null,
+        $or: [{ status: 'Paid' }, { paymentStatus: 'Paid' }]
+      })
     ]);
 
     // Collect motherOrderIds to fetch sibling reseller orders for comprehensive disbursement breakdown
@@ -204,10 +221,39 @@ export async function GET(request: NextRequest) {
         };
       }
 
-      const isOwnProductSale = !supplierPart && !!sellerPart && (motherFee > 0 || Number(order.systemFee) > 0);
+      // Determine if the product was actually uploaded by the logged-in reseller
+      const isActualOwnProduct = (order.items || []).some((item: any) => {
+        const uploader = item.productId?.uploadedBy?._id || item.productId?.uploadedBy;
+        return uploader && uploader.toString() === resellerId.toString();
+      });
 
-      // Fallback calculation for historical orders where motherFee is 0
-      if (motherFee === 0 && supplierPart && sellerPart && sellerPart.amount > 0) {
+      let isOwnProductSale = false;
+
+      if (isActualOwnProduct && !order.shortId?.includes('-F')) {
+        isOwnProductSale = true;
+        // Reseller uploaded their own product: they see their system fee deducted by platform
+      } else if (sellerPart?.isYou) {
+        // Current reseller is the SELLER (Storefront Retailer) selling a sourced product
+        // Confidentiality Rule: Storefront reseller should NEVER see the platform system fee percentage or fee charged to the supplier.
+        // Product Cost to the selling reseller = Base Price + System Fee.
+        if (supplierPart && !supplierPart.isYou) {
+          supplierPart.amount = supplierPart.amount + motherFee;
+          motherFee = 0;
+        } else if (!supplierPart && !isActualOwnProduct) {
+          // Sourced from Mother Catalog
+          const motherProductCost = Math.max(0, (orderValue - deliveryCharge) - (sellerPart?.amount || 0));
+          supplierPart = {
+            name: 'Mother Shop',
+            amount: motherProductCost,
+            isYou: false,
+            status: 'cleared'
+          };
+          motherFee = 0;
+        }
+      }
+
+      // Fallback calculation for historical orders where motherFee is 0 and it's a supplier order
+      if (motherFee === 0 && supplierPart?.isYou && sellerPart && sellerPart.amount > 0) {
         const firstF = fulfillmentRos[0];
         const supplierRate = (firstF?.resellerId as any)?.systemFeePercent !== undefined
           ? Number((firstF.resellerId as any).systemFeePercent)
@@ -248,7 +294,6 @@ export async function GET(request: NextRequest) {
       switch (item._id) {
         case 'Order Placed': statusCounts.placed = item.count; break;
         case 'Confirmed': statusCounts.confirmed = item.count; break;
-        case 'Paid': statusCounts.paid = item.count; break;
         case 'Hold': statusCounts.hold = item.count; break;
         case 'Processing': statusCounts.processing = item.count; break;
         case 'Ready for Delivery': statusCounts.ready = item.count; break;
@@ -257,6 +302,7 @@ export async function GET(request: NextRequest) {
         case 'Cancelled': statusCounts.cancelled = item.count; break;
       }
     });
+    statusCounts.paid = paidOrdersCount;
 
     return NextResponse.json({ orders: processedOrders, total, page, limit, statusCounts });
   } catch (error: any) {
@@ -305,13 +351,57 @@ export async function PATCH(request: NextRequest) {
     if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 });
 
     // If motherOrderId exists, also sync status & commission
+    let updatedMother: any = null;
+    let previousMotherStatus: string | undefined = undefined;
     if (order.motherOrderId) {
-      await Order.findByIdAndUpdate(order.motherOrderId, { $set: { status } });
+      const existingMother = await Order.findById(order.motherOrderId).select('status').lean() as any;
+      previousMotherStatus = existingMother?.status;
+      updatedMother = await Order.findByIdAndUpdate(order.motherOrderId, { $set: { status } }, { new: true });
+      await ResellerOrder.updateMany(
+        { motherOrderId: order.motherOrderId, _id: { $ne: order._id } },
+        { $set: { status } }
+      );
       const { syncResellerCommissionForMotherOrder } = await import('@/lib/resellerCommissionSync');
       await syncResellerCommissionForMotherOrder({
         motherOrderId: order.motherOrderId,
         newStatus: status,
       });
+    }
+
+    // Send Order Confirmed Email to Customer (Strictly ONCE, always under Storefront Seller / Mother Shop identity)
+    const statusJustChanged = status && status !== existingOrder.status && status !== previousMotherStatus;
+    if (statusJustChanged && status === 'Confirmed') {
+      const customerEmail = updatedMother?.shippingAddress?.email || order.customer?.email;
+      if (customerEmail && !customerEmail.endsWith('@store.com') && !customerEmail.endsWith('@guest.com')) {
+        try {
+          const { sendCustomerOrderConfirmedEmail } = await import('@/lib/mail');
+          const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com';
+          let storeName: string | undefined = undefined;
+          let storeUrl: string | undefined = undefined;
+
+          if (updatedMother?.orderSource !== 'mother') {
+            const storefrontResellerId = updatedMother?.storefrontResellerId || (!order.shortId?.includes('-F') && !order.shortId?.includes('-M') ? order.resellerId : null);
+            if (storefrontResellerId) {
+              const resellerDoc = await Reseller.findById(storefrontResellerId).select('storeName subdomain customDomain').lean() as any;
+              if (resellerDoc) {
+                storeName = resellerDoc.storeName || resellerDoc.subdomain;
+                storeUrl = resellerDoc.customDomain ? `https://${resellerDoc.customDomain}` : `https://${resellerDoc.subdomain}.${rootDomain}`;
+              }
+            }
+          }
+
+          sendCustomerOrderConfirmedEmail({
+            email: customerEmail,
+            customerName: updatedMother?.shippingAddress?.fullName || order.customer?.name || 'Customer',
+            shortId: updatedMother?.shortId || order.shortId?.replace(/-[FM]\d+$/, '') || order._id.toString().slice(-8).toUpperCase(),
+            totalAmount: updatedMother?.totalAmount || order.totalAmount || 0,
+            storeName,
+            storeUrl,
+          }).catch(err => console.error('[Reseller PATCH Order Confirmed Mail Error]', err));
+        } catch (mailErr) {
+          console.error('[Reseller PATCH Mail Error]', mailErr);
+        }
+      }
     }
 
     return NextResponse.json({ order });
@@ -530,6 +620,7 @@ export async function POST(request: NextRequest) {
       shippingAddress: {
         fullName: customer.name.trim(),
         phone: customerPhone,
+        email: customer.email?.trim() || undefined,
         street: customer.address.street.trim(),
         city: customer.address.city || 'Dhaka',
         state: customer.address.division || 'Dhaka',
@@ -683,6 +774,77 @@ export async function POST(request: NextRequest) {
       }
     } catch (syncErr) {
       console.error('[Sync Error after manual order creation]', syncErr);
+    }
+
+    // Notify Admin & Supplier Resellers for Manual Order
+    try {
+      const { createAdminNotification, createNotification } = await import('@/lib/notifications');
+      createAdminNotification({
+        title: `🛒 Manual Order #${shortId} (৳${finalTotal})`,
+        message: `Reseller: ${reseller.storeName} — ${customer.name} (${customerPhone})`,
+        type: 'order',
+        link: '/admin/orders',
+        sendPush: true,
+      }).catch(err => console.error('[Manual Order Admin Notif Error]', err));
+
+      if (uploaderItemsMap.size > 0) {
+        let supIdx = 1;
+        for (const [uploaderId, fItems] of uploaderItemsMap.entries()) {
+          const supCommission = fItems.reduce((sum: number, item: any) => sum + (Number(item.purchasePrice) || 0) * item.quantity, 0);
+          const supItemCount = fItems.reduce((sum: number, item: any) => sum + (Number(item.quantity) || 1), 0);
+          const supShortId = `${shortId}-F${supIdx}`;
+          Reseller.findById(uploaderId).select('userId').lean().then((supReseller: any) => {
+            createNotification({
+              userId: supReseller?.userId,
+              resellerId: uploaderId,
+              title: `📦 নতুন সাপ্লাই অর্ডার #${supShortId} (পে-আউট: ৳${supCommission})`,
+              message: `আপনার আপলোড করা প্রোডাক্টের ${supItemCount}টি আইটেম অর্ডার হয়েছে • আপনার সাপ্লাই পে-আউট: ৳${supCommission}`,
+              type: 'order',
+              link: '/reseller/orders',
+              sendPush: true,
+            }).catch(err => console.error('[Manual Order Supplier Notif Error]', err));
+          }).catch(() => {});
+          supIdx++;
+        }
+      }
+
+      // Send Order Confirmation Email to Customer if valid email was provided on Manual Order
+      const rawCustomerEmail = customer.email?.trim();
+      if (rawCustomerEmail && !rawCustomerEmail.endsWith('@store.com') && !rawCustomerEmail.endsWith('@guest.com')) {
+        const { sendCustomerOrderPlacedEmail } = await import('@/lib/mail');
+        const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com';
+        const storeUrl = reseller.customDomain ? `https://${reseller.customDomain}` : `https://${reseller.subdomain}.${rootDomain}`;
+        sendCustomerOrderPlacedEmail({
+          email: rawCustomerEmail,
+          customerName: customer.name.trim(),
+          orderId: resellerOrder._id?.toString(),
+          shortId,
+          items: validatedItems.map((it: any) => ({
+            name: it.name,
+            quantity: it.quantity,
+            price: it.retailPrice,
+            image: it.image,
+            color: it.color,
+            size: it.size,
+          })),
+          subtotal: serverComputedSubtotal,
+          deliveryCharge: delCharge,
+          couponDiscount: discount,
+          totalAmount: finalTotal,
+          paymentMethod: paymentMethod || 'COD',
+          shippingAddress: {
+            fullName: customer.name.trim(),
+            phone: customerPhone,
+            street: customer.address.street.trim(),
+            city: customer.address.city || 'Dhaka',
+            division: customer.address.division || 'Dhaka',
+          },
+          storeName: reseller.storeName || reseller.subdomain,
+          storeUrl,
+        }).catch(err => console.error('[Manual Order Customer Mail Error]', err));
+      }
+    } catch (notifErr) {
+      console.error('[Manual Order Notif Error]', notifErr);
     }
 
     return NextResponse.json({

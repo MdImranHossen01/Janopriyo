@@ -170,6 +170,10 @@ const payablesChartConfig = {
     label: 'In-Transit Profit',
     color: 'var(--chart-4)',
   },
+  suppliers: {
+    label: 'Supplier Bills (AP)',
+    color: 'var(--chart-2)',
+  },
   loans: {
     label: 'Business Loans',
     color: 'var(--chart-5)',
@@ -416,10 +420,12 @@ export default function AdminDashboard() {
     const cleared = data?.stats?.resellerWalletTotal || 0;
     const transit = data?.stats?.resellerPendingTotal || 0;
     const loans = data?.stats?.totalActiveLoansDue || 0;
+    const suppliers = data?.stats?.supplierBillsDueTotal || 0;
 
     return [
       { type: 'Cleared', amount: cleared, fill: 'var(--color-cleared)' },
       { type: 'In-Transit', amount: transit, fill: 'var(--color-transit)' },
+      { type: 'Suppliers', amount: suppliers, fill: 'var(--color-suppliers)' },
       { type: 'Loans', amount: loans, fill: 'var(--color-loans)' },
     ].filter(d => d.amount > 0);
   }, [data?.stats]);
@@ -441,7 +447,7 @@ export default function AdminDashboard() {
     );
   }
 
-  const { stats, lowStockProducts, last7DaysStats } = data || {};
+  const { stats, lowStockProducts, last7DaysStats, topSellers } = data || {};
 
   return (
     <div className="flex-1 space-y-6">
@@ -512,8 +518,8 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* 2. Top KPI Cards (2 rows of 3 cards = 6 cards) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* 2. Top KPI Cards (2 rows of 4 cards = 8 cards in desktop) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Sales Card */}
         <Link
           href="/admin/orders"
@@ -676,6 +682,57 @@ export default function AdminDashboard() {
               <span className="text-muted-foreground font-normal">awaiting approval</span>
             </span>
             <Clock className="h-4 w-4 text-teal-500 opacity-70 group-hover:translate-x-0.5 transition-transform" />
+          </div>
+        </Link>
+
+        {/* Total Products Card */}
+        <Link
+          href="/admin/products"
+          className="relative overflow-hidden bg-gradient-to-br from-emerald-500/15 via-teal-500/10 to-card border border-emerald-500/30 dark:border-emerald-500/20 rounded-2xl p-5 shadow-xs hover:shadow-md hover:border-emerald-500/50 transition-all flex flex-col justify-between group cursor-pointer"
+        >
+          <div className="flex items-start justify-between">
+            <div className="p-3.5 bg-gradient-to-br from-emerald-500 to-teal-600 text-white rounded-xl shadow-md shadow-emerald-500/20 group-hover:scale-105 transition-transform">
+              <Package className="h-6 w-6" />
+            </div>
+            <div className="text-right">
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">Total Products</p>
+              <h3 className="text-2xl font-black text-foreground mt-1">
+                {stats?.totalProductsCount || 0}
+              </h3>
+            </div>
+          </div>
+          <div className="flex items-center justify-between pt-4 border-t border-emerald-500/20 mt-4">
+            <span className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
+              <span className="text-emerald-600 dark:text-emerald-400 font-bold">Mother: {stats?.motherProductsCount || 0}</span>
+              <span className="text-muted-foreground">•</span>
+              <span className="text-teal-600 dark:text-teal-400 font-bold">Reseller: {stats?.resellerProductsCount || 0}</span>
+            </span>
+            <Store className="h-4 w-4 text-emerald-500 opacity-70 group-hover:translate-x-0.5 transition-transform" />
+          </div>
+        </Link>
+
+        {/* Product Pending For Approval Card */}
+        <Link
+          href="/admin/products?tab=pending"
+          className="relative overflow-hidden bg-gradient-to-br from-amber-500/15 via-yellow-500/10 to-card border border-amber-500/30 dark:border-amber-500/20 rounded-2xl p-5 shadow-xs hover:shadow-md hover:border-amber-500/50 transition-all flex flex-col justify-between group cursor-pointer"
+        >
+          <div className="flex items-start justify-between">
+            <div className="p-3.5 bg-gradient-to-br from-amber-500 to-yellow-600 text-white rounded-xl shadow-md shadow-amber-500/20 group-hover:scale-105 transition-transform">
+              <AlertCircle className="h-6 w-6" />
+            </div>
+            <div className="text-right">
+              <p className="text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Pending Products</p>
+              <h3 className="text-2xl font-black text-foreground mt-1">
+                {stats?.pendingApprovalProductsCount || 0}
+              </h3>
+            </div>
+          </div>
+          <div className="flex items-center justify-between pt-4 border-t border-amber-500/20 mt-4">
+            <span className="text-xs font-bold flex items-center gap-1 text-amber-600 dark:text-amber-400">
+              {stats?.pendingApprovalProductsCount ? `${stats.pendingApprovalProductsCount} product(s)` : '0 products'}{' '}
+              <span className="text-muted-foreground font-normal">awaiting approval</span>
+            </span>
+            <Clock className="h-4 w-4 text-amber-500 opacity-70 group-hover:translate-x-0.5 transition-transform" />
           </div>
         </Link>
       </div>
@@ -1098,6 +1155,13 @@ export default function AdminDashboard() {
                   <span className="font-semibold text-foreground">৳{Math.round(stats?.resellerPendingTotal || 0).toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between items-center text-muted-foreground">
+                  <Link href="/admin/supplier-bills?status=due" className="flex items-center gap-1.5 hover:text-primary transition-colors">
+                    <div className="w-2.5 h-2.5 rounded-full bg-[var(--chart-2)] shrink-0" />
+                    <span>Supplier Bills (Accounts Payable):</span>
+                  </Link>
+                  <span className="font-semibold text-amber-600 dark:text-amber-400">৳{Math.round(stats?.supplierBillsDueTotal || 0).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center text-muted-foreground">
                   <span className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-[var(--chart-5)] shrink-0" /> Business Loans (Active):</span>
                   <span className="font-semibold text-rose-600 dark:text-rose-400">৳{Math.round(stats?.totalActiveLoansDue || 0).toLocaleString()}</span>
                 </div>
@@ -1107,7 +1171,7 @@ export default function AdminDashboard() {
 
           <div className="p-4 bg-sky-500/5 border-t border-sky-500/10 flex justify-between items-center font-bold text-sm text-sky-600 dark:text-sky-400">
             <span>Total Payable Obligations:</span>
-            <span className="text-base">৳{Math.round((stats?.resellerWalletTotal || 0) + (stats?.resellerPendingTotal || 0) + (stats?.totalActiveLoansDue || 0)).toLocaleString()}</span>
+            <span className="text-base">৳{Math.round((stats?.resellerWalletTotal || 0) + (stats?.resellerPendingTotal || 0) + (stats?.totalActiveLoansDue || 0) + (stats?.supplierBillsDueTotal || 0)).toLocaleString()}</span>
           </div>
         </div>
       </div>
@@ -1296,6 +1360,126 @@ export default function AdminDashboard() {
             ))
           ) : (
             <div className="p-4 text-center text-muted-foreground italic text-xs">No data recorded.</div>
+          )}
+        </div>
+      </div>
+
+      {/* 8. Top 5 Sellers */}
+      <div className="bg-card rounded-2xl border shadow-xs overflow-hidden">
+        <div className="bg-muted/40 py-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-primary/10 text-primary">
+              <Store className="h-4 w-4" />
+            </div>
+            <div>
+              <h3 className="font-bold text-foreground text-sm flex items-center gap-1.5">
+                Top 5 Sellers
+              </h3>
+              <p className="text-[11px] text-muted-foreground">
+                Top performing drop-shipping resellers based on total sales and delivered orders.
+              </p>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" className="h-8 text-xs font-semibold self-start sm:self-auto" asChild>
+            <Link href="/admin/reports/reseller-sales">
+              View All Resellers →
+            </Link>
+          </Button>
+        </div>
+
+        {/* Desktop Table View */}
+        <div className="hidden sm:block overflow-x-auto p-3">
+          <table className="w-full min-w-[650px] border-collapse text-xs md:text-sm text-center">
+            <thead>
+              <tr className="border-b bg-muted/20 text-muted-foreground font-semibold">
+                <th className="p-2.5 text-center w-12 font-bold text-foreground">Rank</th>
+                <th className="p-2.5 text-left font-bold text-foreground">Reseller Store</th>
+                <th className="p-2.5 text-left font-bold text-foreground">Owner</th>
+                <th className="p-2.5 font-bold text-foreground">Orders</th>
+                <th className="p-2.5 font-bold text-emerald-600">Delivered</th>
+                <th className="p-2.5 font-bold text-primary text-right">Sales Volume</th>
+                <th className="p-2.5 font-bold text-right text-foreground">Earned</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topSellers && topSellers.length > 0 ? (
+                topSellers.map((seller: any) => (
+                  <tr key={seller._id || seller.rank} className="border-b border-muted/30 hover:bg-muted/30 transition-colors">
+                    <td className="p-2.5 text-center text-xs font-semibold text-muted-foreground">
+                      #{seller.rank}
+                    </td>
+                    <td className="p-2.5 text-left">
+                      <div className="font-bold text-foreground flex items-center gap-1.5">
+                        <Store className="h-3.5 w-3.5 text-primary shrink-0" />
+                        <span>{seller.storeName}</span>
+                      </div>
+                      {seller.subdomain && (
+                        <span className="text-[11px] text-muted-foreground">
+                          {seller.subdomain}.{process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com'}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2.5 text-left">
+                      <div className="font-medium text-foreground">{seller.ownerName || '—'}</div>
+                      {seller.ownerPhone && (
+                        <div className="text-[11px] text-muted-foreground">{seller.ownerPhone}</div>
+                      )}
+                    </td>
+                    <td className="p-2.5 font-bold text-foreground">
+                      {seller.totalOrders || 0}
+                    </td>
+                    <td className="p-2.5 font-semibold text-emerald-600">
+                      {seller.deliveredOrders || 0}
+                    </td>
+                    <td className="p-2.5 font-bold text-right text-primary">
+                      ৳{Math.round(seller.totalSales || 0).toLocaleString()}
+                    </td>
+                    <td className="p-2.5 font-semibold text-right text-foreground">
+                      ৳{Math.round(seller.totalCommission || 0).toLocaleString()}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={7} className="p-4 text-center text-muted-foreground italic">
+                    No reseller sales data available for this period.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Mobile Cards View */}
+        <div className="sm:hidden p-2.5 space-y-2">
+          {topSellers && topSellers.length > 0 ? (
+            topSellers.map((seller: any) => (
+              <div key={seller._id || seller.rank} className="bg-background border border-border/80 rounded-xl p-3 text-xs space-y-2 shadow-2xs">
+                <div className="flex items-center justify-between border-b pb-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-muted-foreground">#{seller.rank}</span>
+                    <span className="font-bold text-foreground">{seller.storeName}</span>
+                  </div>
+                  <span className="font-bold text-primary">
+                    ৳{Math.round(seller.totalSales || 0).toLocaleString()}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Owner:</span>
+                    <span className="font-medium text-foreground">{seller.ownerName || '—'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Delivered:</span>
+                    <span className="font-semibold text-emerald-600">{seller.deliveredOrders || 0} / {seller.totalOrders || 0}</span>
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="p-4 text-center text-muted-foreground italic text-xs">
+              No reseller sales data available.
+            </div>
           )}
         </div>
       </div>

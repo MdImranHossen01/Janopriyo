@@ -30,7 +30,9 @@ import {
   EyeOff,
   ExternalLink,
   Users,
-  CheckCircle2
+  CheckCircle2,
+  XCircle,
+  Clock
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -45,6 +47,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuGroup,
 } from '@/components/ui/dropdown-menu';
 import {
   Dialog,
@@ -55,6 +58,9 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+
+type TabType = 'all' | 'mother' | 'reseller' | 'pending';
 
 interface AdminProduct {
   _id: string;
@@ -64,6 +70,7 @@ interface AdminProduct {
   salePrice?: number;
   stock: number;
   isPublished: boolean;
+  isApprovedByAdmin?: boolean;
   images?: string[];
   slug: string;
   brand?: any;
@@ -75,11 +82,25 @@ interface AdminProduct {
   variants?: any[];
   purchasePrice?: number;
   resellerPrice?: number;
-  uploadedBy?: { _id: string; storeName: string; subdomain: string } | null;
+  uploadedBy?: { _id: string; storeName: string; subdomain: string; customDomain?: string } | null;
   isMotherProduct?: boolean;
 }
 
 function ProductsContent() {
+  const getProductStoreUrl = (product: AdminProduct) => {
+    const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com';
+    if (product.uploadedBy && (product.uploadedBy.subdomain || product.uploadedBy.customDomain)) {
+      const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+      const previewQuery = product.isApprovedByAdmin ? '' : '?preview=true';
+      if (isLocalhost) {
+        return `/store/${product.uploadedBy.subdomain}/product/${product.slug}${previewQuery}`;
+      }
+      const storeDomain = product.uploadedBy.customDomain?.replace(/^https?:\/\//, '').replace(/\/+$/, '')
+        || `${product.uploadedBy.subdomain}.${rootDomain}`;
+      return `https://${storeDomain}/product/${product.slug}${previewQuery}`;
+    }
+    return `/product/${product.slug}`;
+  };
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -89,6 +110,7 @@ function ProductsContent() {
   const [pagination, setPagination] = useState({ total: 0, totalPages: 1 });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [exportLoading, setExportLoading] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
   // Add Stock Modal State
@@ -100,21 +122,41 @@ function ProductsContent() {
   const [expiryDate, setExpiryDate] = useState('');
   const [submittingStock, setSubmittingStock] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'all' | 'mother' | 'reseller'>('all');
-  const [counts, setCounts] = useState({ all: 0, mother: 0, reseller: 0 });
+  const initialTab = (searchParams.get('tab') as TabType) || 'all';
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+  const [counts, setCounts] = useState({ all: 0, mother: 0, reseller: 0, pending: 0 });
+
+  // Reseller Filter State
+  const [resellers, setResellers] = useState<any[]>([]);
+  const initialReseller = searchParams.get('resellerId') || 'all';
+  const [resellerFilter, setResellerFilter] = useState<string>(initialReseller);
 
   // Add to Mother Shop Modal State
   const [addToMotherModalOpen, setAddToMotherModalOpen] = useState(false);
   const [selectedResellerProduct, setSelectedResellerProduct] = useState<AdminProduct | null>(null);
   const [motherSellingPrice, setMotherSellingPrice] = useState<string>('');
   const [submittingToMother, setSubmittingToMother] = useState(false);
+  const [togglingApprovalId, setTogglingApprovalId] = useState<string | null>(null);
 
   const limit = 10;
 
-  const fetchProducts = async (signal?: AbortSignal, page = currentPage, tab = activeTab) => {
+  const fetchProducts = async (
+    signal?: AbortSignal,
+    page = currentPage,
+    tab = activeTab,
+    reseller = resellerFilter
+  ) => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/products?page=${page}&limit=${limit}&tab=${tab}`, { signal });
+      const queryParams = new URLSearchParams({
+        page: page.toString(),
+        limit: limit.toString(),
+        tab: tab,
+      });
+      if (reseller && reseller !== 'all') {
+        queryParams.set('resellerId', reseller);
+      }
+      const response = await fetch(`/api/products?${queryParams.toString()}`, { signal });
       if (!response.ok) {
         toast.error(`Failed to fetch products: ${response.status} ${response.statusText}`);
         return;
@@ -123,7 +165,12 @@ function ProductsContent() {
       setProducts(Array.isArray(data.products) ? data.products : []);
       setPagination(data.pagination || { total: 0, totalPages: 1 });
       if (data.counts) {
-        setCounts(data.counts);
+        setCounts({
+          all: data.counts.all || 0,
+          mother: data.counts.mother || 0,
+          reseller: data.counts.reseller || 0,
+          pending: data.counts.pending || 0,
+        });
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return;
@@ -133,10 +180,62 @@ function ProductsContent() {
     }
   };
 
-  const handleTabChange = (tab: 'all' | 'mother' | 'reseller') => {
+  const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
     setCurrentPage(1);
-    fetchProducts(undefined, 1, tab);
+
+    let targetReseller = resellerFilter;
+    if (tab === 'mother' && resellerFilter !== 'all' && resellerFilter !== 'main') {
+      targetReseller = 'main';
+      setResellerFilter('main');
+    } else if (tab === 'reseller' && resellerFilter === 'main') {
+      targetReseller = 'all';
+      setResellerFilter('all');
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('page', '1');
+    params.set('tab', tab);
+    if (targetReseller !== 'all') {
+      params.set('resellerId', targetReseller);
+    } else {
+      params.delete('resellerId');
+    }
+    router.push(`?${params.toString()}`);
+    fetchProducts(undefined, 1, tab, targetReseller);
+  };
+
+  const handleResellerChange = (val: string) => {
+    setResellerFilter(val);
+    setCurrentPage(1);
+
+    let targetTab = activeTab;
+    if (val === 'main') {
+      if (activeTab === 'reseller' || activeTab === 'pending') {
+        targetTab = 'all';
+        setActiveTab('all');
+      }
+    } else if (val !== 'all') {
+      if (activeTab === 'mother') {
+        targetTab = 'reseller';
+        setActiveTab('reseller');
+      }
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('page', '1');
+    if (val !== 'all') {
+      params.set('resellerId', val);
+    } else {
+      params.delete('resellerId');
+    }
+    if (targetTab !== 'all') {
+      params.set('tab', targetTab);
+    } else {
+      params.delete('tab');
+    }
+    router.push(`?${params.toString()}`);
+    fetchProducts(undefined, 1, targetTab, val);
   };
 
   const openAddToMotherModal = (product: AdminProduct) => {
@@ -223,8 +322,20 @@ function ProductsContent() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchProducts(controller.signal);
+    fetchProducts(controller.signal, currentPage, activeTab, initialReseller);
     return () => controller.abort();
+  }, []);
+
+  // Fetch resellers for the filter dropdown
+  useEffect(() => {
+    fetch('/api/admin/resellers')
+      .then(res => res.json())
+      .then(data => {
+        if (data.resellers && Array.isArray(data.resellers)) {
+          setResellers(data.resellers);
+        }
+      })
+      .catch(console.error);
   }, []);
 
   const handleDelete = async (id: string) => {
@@ -260,6 +371,73 @@ function ProductsContent() {
       } catch (error) {
         toast.error('An error occurred while deleting the product');
       }
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+
+    const selectedMotherProducts = products.filter(p => selectedIds.includes(p._id) && !p.uploadedBy);
+    const selectedResellerProducts = products.filter(p => selectedIds.includes(p._id) && Boolean(p.uploadedBy));
+
+    if (selectedMotherProducts.length === 0) {
+      await Swal.fire({
+        title: 'Cannot Delete Reseller Products',
+        html: `All <b>${selectedIds.length} selected product(s)</b> were uploaded by resellers.<br/><br/><span style="color:#ef4444;font-size:12px;">Reseller products cannot be permanently deleted by Mother Admin. You can hide, unpublish, or revoke approval instead.</span>`,
+        icon: 'warning',
+        confirmButtonColor: 'var(--primary, #ea580c)'
+      });
+      return;
+    }
+
+    let warningHtml = `You are about to permanently delete <b>${selectedMotherProducts.length} Mother Shop product(s)</b> and purge their images from Cloudflare R2.`;
+    if (selectedResellerProducts.length > 0) {
+      warningHtml += `<br/><br/><span style="color:#f59e0b;font-size:12px;">Notice: ${selectedResellerProducts.length} reseller product(s) are protected and will be preserved automatically.</span>`;
+    }
+
+    const confirmResult = await Swal.fire({
+      title: `Delete ${selectedMotherProducts.length} Product(s)?`,
+      html: warningHtml,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: 'var(--destructive, #ef4444)',
+      confirmButtonText: `Yes, Delete (${selectedMotherProducts.length})`,
+      cancelButtonText: 'Cancel'
+    });
+
+    if (!confirmResult.isConfirmed) return;
+
+    setIsBulkDeleting(true);
+    try {
+      const res = await fetch('/api/products', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedMotherProducts.map(p => p._id) })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Failed to delete selected products');
+      }
+
+      await Swal.fire({
+        title: 'Deleted Successfully!',
+        text: data.message,
+        icon: 'success',
+        confirmButtonColor: '#10b981'
+      });
+
+      setSelectedIds([]);
+      fetchProducts(undefined, currentPage);
+    } catch (err: any) {
+      await Swal.fire({
+        title: 'Delete Failed',
+        text: err.message || 'Error occurred while deleting products',
+        icon: 'error',
+        confirmButtonColor: 'var(--destructive, #ef4444)'
+      });
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -300,6 +478,123 @@ function ProductsContent() {
     }
   };
 
+  const handleToggleApproval = async (product: AdminProduct) => {
+    const newApproval = !product.isApprovedByAdmin;
+    const actionVerb = newApproval ? 'approve' : 'revoke approval for';
+    const actionTitle = newApproval ? 'Approve Reseller Product' : 'Revoke Product Approval';
+
+    const confirmResult = await Swal.fire({
+      title: `${actionTitle}?`,
+      text: newApproval 
+        ? `Are you sure you want to approve "${product.name}"? The reseller and other resellers will be able to sell this product on their storefronts.`
+        : `Are you sure you want to revoke approval for "${product.name}"? Resellers will no longer be able to sell or source this product.`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: newApproval ? 'Yes, Approve' : 'Yes, Revoke',
+      cancelButtonText: 'Cancel',
+      confirmButtonColor: newApproval ? '#10b981' : '#f59e0b',
+      cancelButtonColor: '#6b7280',
+    });
+
+    if (!confirmResult.isConfirmed) return;
+
+    try {
+      const res = await fetch(`/api/products/${product._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isApprovedByAdmin: newApproval }),
+      });
+
+      if (res.ok) {
+        toast.success(`Product ${newApproval ? 'approved' : 'approval revoked'} successfully`);
+        setProducts(prev => prev.map(p => p._id === product._id ? { ...p, isApprovedByAdmin: newApproval } : p));
+        setCounts(prev => ({
+          ...prev,
+          pending: Math.max(0, prev.pending + (newApproval ? -1 : 1))
+        }));
+      } else {
+        const err = await res.json();
+        toast.error(err.message || `Failed to ${actionVerb} product`);
+      }
+    } catch {
+      toast.error('Network error while updating product approval status');
+    }
+  };
+
+  const handleDirectToggleApproval = async (product: AdminProduct) => {
+    const newApproval = !product.isApprovedByAdmin;
+    setTogglingApprovalId(product._id);
+
+    // Optimistic UI update
+    setProducts(prev => prev.map(p => p._id === product._id ? { ...p, isApprovedByAdmin: newApproval } : p));
+    setCounts(prev => ({
+      ...prev,
+      pending: Math.max(0, prev.pending + (newApproval ? -1 : 1))
+    }));
+
+    try {
+      const res = await fetch(`/api/products/${product._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isApprovedByAdmin: newApproval }),
+      });
+
+      if (res.ok) {
+        toast.success(`"${product.name}" ${newApproval ? 'Approved' : 'Approval Revoked'}`);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.message || 'Failed to update approval status');
+        // Rollback
+        setProducts(prev => prev.map(p => p._id === product._id ? { ...p, isApprovedByAdmin: !newApproval } : p));
+        setCounts(prev => ({
+          ...prev,
+          pending: Math.max(0, prev.pending + (newApproval ? 1 : -1))
+        }));
+      }
+    } catch {
+      toast.error('Network error updating approval status');
+      // Rollback
+      setProducts(prev => prev.map(p => p._id === product._id ? { ...p, isApprovedByAdmin: !newApproval } : p));
+      setCounts(prev => ({
+        ...prev,
+        pending: Math.max(0, prev.pending + (newApproval ? 1 : -1))
+      }));
+    } finally {
+      setTogglingApprovalId(null);
+    }
+  };
+
+  const handleDirectTogglePublish = async (product: AdminProduct) => {
+    const newStatus = !product.isPublished;
+    setTogglingApprovalId(product._id);
+
+    // Optimistic UI update
+    setProducts(prev => prev.map(p => p._id === product._id ? { ...p, isPublished: newStatus } : p));
+
+    try {
+      const res = await fetch(`/api/products/${product._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPublished: newStatus }),
+      });
+
+      if (res.ok) {
+        toast.success(`"${product.name}" ${newStatus ? 'Published' : 'Hidden'}`);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.message || 'Failed to update product visibility');
+        // Rollback
+        setProducts(prev => prev.map(p => p._id === product._id ? { ...p, isPublished: !newStatus } : p));
+      }
+    } catch {
+      toast.error('Network error updating product visibility');
+      // Rollback
+      setProducts(prev => prev.map(p => p._id === product._id ? { ...p, isPublished: !newStatus } : p));
+    } finally {
+      setTogglingApprovalId(null);
+    }
+  };
+
   const toggleSelectAll = () => {
     if (selectedIds.length === filteredProducts.length) {
       setSelectedIds([]);
@@ -334,7 +629,11 @@ function ProductsContent() {
 
     try {
       toast.info('Fetching products for export...');
-      const response = await fetch(`/api/products?page=1&limit=1000`);
+      const exportUrl = new URLSearchParams({ page: '1', limit: '1000', tab: activeTab });
+      if (resellerFilter !== 'all') {
+        exportUrl.set('resellerId', resellerFilter);
+      }
+      const response = await fetch(`/api/products?${exportUrl.toString()}`);
       if (response.ok) {
         const data = await response.json();
         const allProducts: AdminProduct[] = Array.isArray(data.products) ? data.products : [];
@@ -622,18 +921,132 @@ function ProductsContent() {
             </Badge>
           )}
         </Button>
+        <Button
+          variant={activeTab === 'pending' ? 'default' : 'outline'}
+          size="sm"
+          className={`h-8 text-xs font-semibold gap-1.5 ${activeTab === 'pending' ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'border-amber-500/30 text-amber-700 dark:text-amber-400 hover:bg-amber-500/10'}`}
+          onClick={() => handleTabChange('pending')}
+        >
+          <Clock className="h-3.5 w-3.5" />
+          <span>Pending Approval</span>
+          {counts.pending > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 py-0 h-4 text-[10px] bg-amber-500/20 text-amber-800 dark:text-amber-300 font-bold">
+              {counts.pending}
+            </Badge>
+          )}
+        </Button>
       </div>
 
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
+      {/* In-Page Bulk Action Bar */}
+      {selectedIds.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-destructive/10 border border-destructive/20 rounded-xl animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="destructive" className="text-xs px-2.5 py-0.5 font-bold">
+              {selectedIds.length} Selected
+            </Badge>
+            <span className="text-xs text-muted-foreground font-medium">
+              Actions for selected products:
+            </span>
+            {products.filter(p => selectedIds.includes(p._id) && Boolean(p.uploadedBy)).length > 0 && (
+              <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30">
+                Reseller items protected ({products.filter(p => selectedIds.includes(p._id) && Boolean(p.uploadedBy)).length})
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSelectedIds([])}
+              className="h-8 text-xs font-semibold"
+            >
+              Deselect All
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleBulkDelete}
+              disabled={isBulkDeleting}
+              className="h-8 text-xs font-bold gap-1.5"
+            >
+              {isBulkDeleting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash className="h-3.5 w-3.5" />
+              )}
+              Delete Selected ({products.filter(p => selectedIds.includes(p._id) && !p.uploadedBy).length})
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             placeholder="Search products by name or SKU..."
-            className="pl-8 h-9 text-xs sm:text-sm"
+            className="pl-8 h-9 text-xs sm:text-sm bg-background"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+
+        {/* Reseller / Shop Filter Dropdown */}
+        <div className="w-full sm:w-48 shrink-0">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="h-9 w-full justify-between px-3 text-xs sm:text-sm font-normal bg-background">
+                <span className="truncate">
+                  {resellerFilter === 'all' 
+                    ? 'All' 
+                    : resellerFilter === 'main'
+                    ? 'Main Shop'
+                    : resellers.find(r => r._id === resellerFilter)?.storeName || 'Select Shop'}
+                </span>
+                <ChevronDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-[200px] max-h-[300px] overflow-y-auto">
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  onClick={() => handleResellerChange('all')}
+                  className={resellerFilter === 'all' ? "bg-accent font-bold" : ""}
+                >
+                  All
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleResellerChange('main')}
+                  className={resellerFilter === 'main' ? "bg-accent font-bold" : ""}
+                >
+                  Main Shop
+                </DropdownMenuItem>
+                {resellers.map((r) => (
+                  <DropdownMenuItem
+                    key={r._id}
+                    onClick={() => handleResellerChange(r._id)}
+                    className={resellerFilter === r._id ? "bg-accent font-bold" : ""}
+                  >
+                    {r.storeName}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        {(resellerFilter !== 'all' || search) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSearch('');
+              handleResellerChange('all');
+            }}
+            className="text-xs text-muted-foreground hover:text-primary shrink-0 h-9 px-2.5"
+          >
+            Clear Filter
+          </Button>
+        )}
       </div>
 
       <div className="rounded-xl border bg-background overflow-hidden relative shadow-xs">
@@ -656,7 +1069,7 @@ function ProductsContent() {
                 <TableHead className="min-w-[150px]">Total Stock (Cumulative)</TableHead>
                 <TableHead>Views</TableHead>
                 <TableHead>Sales</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead className="text-center w-[100px]">Approve</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -719,7 +1132,7 @@ function ProductsContent() {
                         <TableCell className="font-medium max-w-[240px]">
                           <div className="flex flex-col gap-0.5">
                             <Link 
-                              href={`/product/${product.slug}`} 
+                              href={getProductStoreUrl(product)} 
                               target="_blank"
                               className="hover:text-primary transition-colors hover:underline decoration-primary/30 underline-offset-4 truncate font-bold text-sm"
                             >
@@ -809,10 +1222,54 @@ function ProductsContent() {
                         <TableCell>
                           <span className="font-bold text-primary">{product.totalSales ?? 0}</span>
                         </TableCell>
-                        <TableCell>
-                          <Badge variant={product.isPublished ? 'default' : 'secondary'}>
-                            {product.isPublished ? 'Published' : 'Draft'}
-                          </Badge>
+                        <TableCell className="text-center">
+                          {product.uploadedBy ? (
+                            <div className="flex items-center justify-center">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={Boolean(product.isApprovedByAdmin)}
+                                onClick={() => handleDirectToggleApproval(product)}
+                                disabled={togglingApprovalId === product._id}
+                                title={product.isApprovedByAdmin ? 'Approved (Click to revoke)' : 'Pending Approval (Click to approve)'}
+                                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${
+                                  product.isApprovedByAdmin
+                                    ? 'bg-emerald-600 border-emerald-600'
+                                    : 'bg-slate-300 dark:bg-neutral-700 border-slate-400 dark:border-neutral-500'
+                                } ${togglingApprovalId === product._id ? 'opacity-50 cursor-wait' : ''}`}
+                              >
+                                <span
+                                  aria-hidden="true"
+                                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                    product.isApprovedByAdmin ? 'translate-x-5' : 'translate-x-0'
+                                  }`}
+                                />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={Boolean(product.isPublished)}
+                                onClick={() => handleDirectTogglePublish(product)}
+                                disabled={togglingApprovalId === product._id}
+                                title={product.isPublished ? 'Live on Store (Click to hide)' : 'Draft (Click to publish)'}
+                                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 ${
+                                  product.isPublished
+                                    ? 'bg-primary border-primary'
+                                    : 'bg-slate-300 dark:bg-neutral-700 border-slate-400 dark:border-neutral-500'
+                                } ${togglingApprovalId === product._id ? 'opacity-50 cursor-wait' : ''}`}
+                              >
+                                <span
+                                  aria-hidden="true"
+                                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                    product.isPublished ? 'translate-x-5' : 'translate-x-0'
+                                  }`}
+                                />
+                              </button>
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           <DropdownMenu>
@@ -821,9 +1278,22 @@ function ProductsContent() {
                                 <MoreHorizontal className="h-4 w-4" />
                               </Button>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-48">
+                            <DropdownMenuContent align="end" className="w-52">
                               {product.uploadedBy ? (
                                 <>
+                                  <DropdownMenuItem onClick={() => handleToggleApproval(product)} className={`gap-2 font-semibold ${product.isApprovedByAdmin ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                    {product.isApprovedByAdmin ? (
+                                      <>
+                                        <XCircle className="h-4 w-4" />
+                                        <span>Revoke Approval</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <CheckCircle2 className="h-4 w-4" />
+                                        <span>Approve Product</span>
+                                      </>
+                                    )}
+                                  </DropdownMenuItem>
                                   {!product.isMotherProduct ? (
                                     <DropdownMenuItem onClick={() => openAddToMotherModal(product)} className="gap-2 font-semibold text-emerald-600 dark:text-emerald-400">
                                       <PackagePlus className="h-4 w-4" />
@@ -849,7 +1319,7 @@ function ProductsContent() {
                                     )}
                                   </DropdownMenuItem>
                                   <DropdownMenuItem asChild className="gap-2">
-                                    <Link href={`/product/${product.slug}`} target="_blank" className="flex items-center gap-2 w-full">
+                                    <Link href={getProductStoreUrl(product)} target="_blank" className="flex items-center gap-2 w-full">
                                       <ExternalLink className="h-4 w-4 text-muted-foreground" />
                                       <span>View Storefront</span>
                                     </Link>
@@ -971,7 +1441,7 @@ function ProductsContent() {
 
                     <div className="flex-1 min-w-0">
                       <Link
-                        href={`/product/${product.slug}`}
+                        href={getProductStoreUrl(product)}
                         target="_blank"
                         className="font-bold text-foreground text-xs hover:text-primary transition-colors line-clamp-2"
                       >
@@ -1053,21 +1523,66 @@ function ProductsContent() {
                   )}
 
                   {/* Card Bottom Actions */}
-                  <div className="flex items-center justify-between pt-2 border-t gap-1">
-                    <div className="flex items-center gap-1.5">
-                      <Badge variant={product.isPublished ? 'default' : 'secondary'} className="text-[10px]">
-                        {product.isPublished ? 'Published' : 'Draft/Hidden'}
-                      </Badge>
-                      {product.uploadedBy && (
-                        <span className="text-[10px] text-muted-foreground italic">
-                          (Reseller)
-                        </span>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between pt-2 border-t gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-muted-foreground">Approve:</span>
+                      {product.uploadedBy ? (
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={Boolean(product.isApprovedByAdmin)}
+                          onClick={() => handleDirectToggleApproval(product)}
+                          disabled={togglingApprovalId === product._id}
+                          title={product.isApprovedByAdmin ? 'Approved (Click to revoke)' : 'Pending Approval (Click to approve)'}
+                          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out ${
+                            product.isApprovedByAdmin
+                              ? 'bg-emerald-600 border-emerald-600'
+                              : 'bg-slate-300 dark:bg-neutral-700 border-slate-400 dark:border-neutral-500'
+                          } ${togglingApprovalId === product._id ? 'opacity-50 cursor-wait' : ''}`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                              product.isApprovedByAdmin ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={Boolean(product.isPublished)}
+                          onClick={() => handleDirectTogglePublish(product)}
+                          disabled={togglingApprovalId === product._id}
+                          title={product.isPublished ? 'Live on Store (Click to hide)' : 'Draft (Click to publish)'}
+                          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out ${
+                            product.isPublished
+                              ? 'bg-primary border-primary'
+                              : 'bg-slate-300 dark:bg-neutral-700 border-slate-400 dark:border-neutral-500'
+                          } ${togglingApprovalId === product._id ? 'opacity-50 cursor-wait' : ''}`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                              product.isPublished ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
                       {product.uploadedBy ? (
                         <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className={`h-7 px-2 text-xs font-semibold gap-1 ${product.isApprovedByAdmin ? 'text-amber-600 dark:text-amber-400 border-amber-500/30' : 'text-emerald-600 dark:text-emerald-400 border-emerald-500/30'}`}
+                            onClick={() => handleToggleApproval(product)}
+                          >
+                            {product.isApprovedByAdmin ? <XCircle className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                            {product.isApprovedByAdmin ? 'Revoke' : 'Approve'}
+                          </Button>
                           {!product.isMotherProduct ? (
                             <Button
                               variant="outline"
@@ -1093,7 +1608,7 @@ function ProductsContent() {
                             className="h-7 px-2 text-xs text-muted-foreground"
                             asChild
                           >
-                            <Link href={`/product/${product.slug}`} target="_blank">
+                            <Link href={getProductStoreUrl(product)} target="_blank">
                               <ExternalLink className="h-3.5 w-3.5" />
                             </Link>
                           </Button>
@@ -1142,9 +1657,15 @@ function ProductsContent() {
             totalPages={pagination.totalPages}
             onPageChange={(page) => {
               setCurrentPage(page);
-              fetchProducts(undefined, page);
+              fetchProducts(undefined, page, activeTab, resellerFilter);
               const params = new URLSearchParams(searchParams.toString());
               params.set('page', page.toString());
+              if (resellerFilter !== 'all') {
+                params.set('resellerId', resellerFilter);
+              }
+              if (activeTab !== 'all') {
+                params.set('tab', activeTab);
+              }
               router.push(`?${params.toString()}`);
             }}
           />
@@ -1366,6 +1887,38 @@ function ProductsContent() {
           </Dialog>
         );
       })()}
+
+      {/* Floating Sticky Bulk Action Bar for high visibility */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-2.5 bg-background/95 backdrop-blur-md border border-border shadow-2xl rounded-full animate-in fade-in slide-in-from-bottom-5">
+          <Badge variant="destructive" className="text-xs px-2.5 py-0.5 rounded-full font-bold">
+            {selectedIds.length} Selected
+          </Badge>
+          <div className="h-4 w-px bg-border" />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSelectedIds([])}
+            className="h-8 text-xs font-semibold px-2 hover:bg-muted rounded-full"
+          >
+            Deselect
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleBulkDelete}
+            disabled={isBulkDeleting}
+            className="h-8 text-xs font-bold gap-1.5 px-3.5 rounded-full shadow-md"
+          >
+            {isBulkDeleting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash className="h-3.5 w-3.5" />
+            )}
+            Delete Selected ({products.filter(p => selectedIds.includes(p._id) && !p.uploadedBy).length})
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

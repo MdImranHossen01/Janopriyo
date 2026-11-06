@@ -4,12 +4,38 @@ import dbConnect from '@/lib/db';
 import Reseller from '@/models/Reseller';
 import Product from '@/models/Product';
 import ResellerProduct from '@/models/ResellerProduct';
+import GlobalSettings from '@/models/GlobalSettings';
 import { addProductToReseller } from '@/lib/syncEngine';
 
-async function getResellerId(userId: string) {
+function parseWhatsAppInfo(targetNumber: string) {
+  let sellerWhatsAppNumber = '';
+  let sellerWhatsAppUrl = '';
+  if (!targetNumber) return { sellerWhatsAppNumber, sellerWhatsAppUrl };
+
+  const trimmed = targetNumber.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('wa.me/')) {
+    sellerWhatsAppUrl = trimmed;
+    const digits = trimmed.replace(/\D/g, '');
+    sellerWhatsAppNumber = digits.length >= 10
+      ? (digits.startsWith('880') ? '0' + digits.slice(3) : (digits.startsWith('88') ? '0' + digits.slice(2) : digits))
+      : trimmed;
+  } else {
+    sellerWhatsAppNumber = trimmed;
+    let digits = trimmed.replace(/\D/g, '');
+    if (digits.startsWith('01') && digits.length === 11) {
+      digits = '88' + digits;
+    } else if (!digits.startsWith('880') && digits.length === 10) {
+      digits = '880' + digits;
+    }
+    sellerWhatsAppUrl = `https://wa.me/${digits}`;
+  }
+  return { sellerWhatsAppNumber, sellerWhatsAppUrl };
+}
+
+async function getResellerInfo(userId: string) {
   await dbConnect();
-  const reseller = await Reseller.findOne({ userId });
-  return reseller?._id || null;
+  const reseller = await Reseller.findOne({ userId }).select('_id subdomain customDomain storeName').lean();
+  return reseller || null;
 }
 
 // GET: Fetch products available for sourcing (Admin or other Resellers' shared products)
@@ -20,10 +46,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const resellerId = await getResellerId(session.user.id);
-    if (!resellerId) {
+    const [currentReseller, globalSettings] = await Promise.all([
+      getResellerInfo(session.user.id),
+      GlobalSettings.findOne({}).select('contact socialLinks brandName').lean(),
+    ]);
+
+    if (!currentReseller) {
       return NextResponse.json({ error: 'Reseller profile not found' }, { status: 404 });
     }
+    const resellerId = currentReseller._id;
 
     const searchParams = request.nextUrl.searchParams;
     let page = parseInt(searchParams.get('page') || '1', 10);
@@ -35,37 +66,60 @@ export async function GET(request: NextRequest) {
 
     const search = searchParams.get('search') || '';
     const sourceFilter = searchParams.get('source') || 'all'; // 'all' | 'top_selling' | 'admin' | 'reseller' | 'sourced'
+    const resellerParam = searchParams.get('resellerId') || searchParams.get('uploadedBy');
 
     // Build query based on source filter
     let query: Record<string, any> = { isPublished: true };
     let sortOption: Record<string, any> = { createdAt: -1 };
 
-    if (sourceFilter === 'admin') {
+    if (sourceFilter === 'sourced') {
+      const sourcedProductIds = await ResellerProduct.find({ resellerId }).distinct('productId');
+      query._id = { $in: sourcedProductIds };
+    } else if (sourceFilter === 'admin') {
       // Only Main Store / Admin products
       query.$or = [
         { uploadedBy: null },
         { uploadedBy: { $exists: false } },
       ];
     } else if (sourceFilter === 'reseller') {
-      // Only other resellers' shared products
+      // Only other resellers' shared products that have been approved by Mother Shop Admin
       query.uploadedBy = { $ne: resellerId };
       query.isShared = true;
+      query.isApprovedByAdmin = true;
       // Exclude products with no uploadedBy (admin)
       query['$and'] = [{ uploadedBy: { $ne: null } }, { uploadedBy: { $exists: true } }];
     } else if (sourceFilter === 'top_selling') {
       query.$or = [
         { uploadedBy: null },
         { uploadedBy: { $exists: false } },
-        { uploadedBy: { $ne: resellerId }, isShared: true },
+        { uploadedBy: { $ne: resellerId }, isShared: true, isApprovedByAdmin: true },
       ];
       sortOption = { totalSales: -1, views: -1, ratings: -1, createdAt: -1 };
     } else {
-      // 'all' or 'sourced' — default: show admin + other resellers' shared products
+      // 'all' — default: show admin + other resellers' shared products that are approved
       query.$or = [
         { uploadedBy: null },
         { uploadedBy: { $exists: false } },
-        { uploadedBy: { $ne: resellerId }, isShared: true },
+        { uploadedBy: { $ne: resellerId }, isShared: true, isApprovedByAdmin: true },
       ];
+    }
+
+    // Apply resellerId filter if provided
+    if (resellerParam && resellerParam !== 'all') {
+      if (['admin', 'main', 'null', 'mother'].includes(resellerParam.toLowerCase())) {
+        query.$or = [
+          { uploadedBy: null },
+          { uploadedBy: { $exists: false } },
+        ];
+        delete query.uploadedBy;
+        delete query['$and'];
+      } else {
+        query.uploadedBy = resellerParam;
+        query.isShared = true;
+        query.isApprovedByAdmin = true;
+        delete query.$or;
+        delete query['$and'];
+      }
     }
 
     if (search) {
@@ -76,7 +130,7 @@ export async function GET(request: NextRequest) {
     const [products, total] = await Promise.all([
       Product.find(query)
         .populate('categories', 'name slug')
-        .populate('uploadedBy', 'storeName subdomain logoUrl')
+        .populate('uploadedBy', 'storeName subdomain customDomain logoUrl contact socialLinks pickupAddress')
         .sort(sortOption)
         .skip((page - 1) * limit)
         .limit(limit)
@@ -84,7 +138,7 @@ export async function GET(request: NextRequest) {
       Product.countDocuments(query),
     ]);
 
-    // Find already sourced products by this reseller
+    // Find already sourced products by this reseller for current page products
     const productIds = products.map((p) => p._id);
     const sourced = await ResellerProduct.find({
       resellerId,
@@ -93,16 +147,64 @@ export async function GET(request: NextRequest) {
 
     const sourcedMap = new Map(sourced.map((s) => [s.productId.toString(), s]));
 
-    let mappedProducts = products.map((product: any) => {
+    const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com';
+    const isDev = process.env.NODE_ENV !== 'production';
+    const protocol = isDev ? 'http' : 'https';
+    const mainStoreBaseUrl = `${protocol}://www.${rootDomain}`;
+
+    const mappedProducts = products.map((product: any) => {
       const sourcedItem: any = sourcedMap.get(product._id.toString());
+      const isSourced = Boolean(sourcedItem);
       const isFromReseller = Boolean(product.uploadedBy);
       const resellerName = typeof product.uploadedBy === 'object' && product.uploadedBy !== null
         ? (product.uploadedBy.storeName || product.uploadedBy.name)
         : null;
 
+      let storefrontUrl = `${mainStoreBaseUrl}/product/${product.slug}`;
+      if (isSourced) {
+        // Product is added to the current reseller's store -> use current reseller's store link
+        if ((currentReseller as any).customDomain) {
+          storefrontUrl = `${protocol}://${(currentReseller as any).customDomain}/product/${product.slug}`;
+        } else if ((currentReseller as any).subdomain) {
+          storefrontUrl = `${protocol}://${(currentReseller as any).subdomain}.${rootDomain}/product/${product.slug}`;
+        }
+      } else {
+        // Product is NOT added to current reseller's store -> use source's link
+        if (isFromReseller && typeof product.uploadedBy === 'object') {
+          const sourceReseller = product.uploadedBy;
+          if (sourceReseller.customDomain) {
+            storefrontUrl = `${protocol}://${sourceReseller.customDomain}/product/${product.slug}`;
+          } else if (sourceReseller.subdomain) {
+            storefrontUrl = `${protocol}://${sourceReseller.subdomain}.${rootDomain}/product/${product.slug}`;
+          }
+        }
+      }
+
+      // Compute Source Seller WhatsApp details
+      let sellerWhatsAppNumber = '';
+      let sellerWhatsAppUrl = '';
+      if (isFromReseller && typeof product.uploadedBy === 'object' && product.uploadedBy !== null) {
+        const sourceReseller = product.uploadedBy;
+        const rawWhatsApp = sourceReseller?.socialLinks?.whatsapp?.trim() || '';
+        const rawPhone = sourceReseller?.contact?.phone?.trim() || sourceReseller?.pickupAddress?.phone?.trim() || '';
+        const parsed = parseWhatsAppInfo(rawWhatsApp || rawPhone);
+        sellerWhatsAppNumber = parsed.sellerWhatsAppNumber;
+        sellerWhatsAppUrl = parsed.sellerWhatsAppUrl;
+      } else {
+        // Main Store / Mother Shop product
+        const rawWhatsApp = (globalSettings as any)?.socialLinks?.whatsapp?.trim() || '';
+        const rawPhone = (globalSettings as any)?.contact?.phone?.trim() || '';
+        const parsed = parseWhatsAppInfo(rawWhatsApp || rawPhone);
+        sellerWhatsAppNumber = parsed.sellerWhatsAppNumber;
+        sellerWhatsAppUrl = parsed.sellerWhatsAppUrl;
+      }
+
       return {
         ...product,
-        isSourced: !!sourcedItem,
+        isSourced,
+        storefrontUrl,
+        sellerWhatsAppNumber,
+        sellerWhatsAppUrl,
         sourceType: (!product.uploadedBy) ? 'admin' : 'reseller',
         sourceStoreName: isFromReseller ? (resellerName || 'Reseller') : 'Main Store',
         sourcedDetails: sourcedItem
@@ -117,29 +219,64 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // If filter = 'sourced', only return products already added to store
-    if (sourceFilter === 'sourced') {
-      mappedProducts = mappedProducts.filter((p: any) => p.isSourced);
-    }
+    // Find distinct other resellers who have approved shared B2B products
+    const sharedResellerIds = await Product.find({
+      isPublished: true,
+      uploadedBy: { $ne: resellerId, $exists: true, $nin: [null] },
+      isShared: true,
+      isApprovedByAdmin: true,
+    }).distinct('uploadedBy');
+
+    const availableResellers = await Reseller.find({
+      _id: { $in: sharedResellerIds }
+    }).select('_id storeName subdomain customDomain').sort({ storeName: 1 }).lean();
 
     // Count totals for tab badges
-    const allProducts = (await Product.find({
+    let countBaseQuery: any = {
       isPublished: true,
       $or: [
         { uploadedBy: null },
         { uploadedBy: { $exists: false } },
-        { uploadedBy: { $ne: resellerId }, isShared: true },
+        { uploadedBy: { $ne: resellerId }, isShared: true, isApprovedByAdmin: true },
       ],
-    }).select('_id uploadedBy totalSales').lean()) as any[];
+    };
 
-    const adminCount = allProducts.filter((p: any) => !p.uploadedBy).length;
-    const resellerCount = allProducts.filter((p: any) => p.uploadedBy).length;
-    const topSellingCount = allProducts.filter((p: any) => (p.totalSales || 0) > 0).length || allProducts.length;
-    const sourcedCount = sourced.length;
+    if (resellerParam && resellerParam !== 'all') {
+      if (['admin', 'main', 'null', 'mother'].includes(resellerParam.toLowerCase())) {
+        countBaseQuery = {
+          isPublished: true,
+          $or: [
+            { uploadedBy: null },
+            { uploadedBy: { $exists: false } },
+          ],
+        };
+      } else {
+        countBaseQuery = {
+          isPublished: true,
+          uploadedBy: resellerParam,
+          isShared: true,
+          isApprovedByAdmin: true,
+        };
+      }
+    }
+
+    const [allProducts, sourcedCount] = await Promise.all([
+      Product.find(countBaseQuery).select('_id uploadedBy totalSales').lean(),
+      ResellerProduct.countDocuments({ resellerId }),
+    ]);
+
+    const adminCount = (allProducts as any[]).filter((p: any) => !p.uploadedBy).length;
+    const resellerCount = (allProducts as any[]).filter((p: any) => p.uploadedBy).length;
+    const topSellingCount = (allProducts as any[]).filter((p: any) => (p.totalSales || 0) > 0).length || allProducts.length;
 
     return NextResponse.json({
       products: mappedProducts,
-      pagination: { total: sourceFilter === 'sourced' ? mappedProducts.length : total, page, limit, totalPages: sourceFilter === 'sourced' ? 1 : Math.ceil(total / limit) },
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
       counts: {
         all: allProducts.length,
         top_selling: topSellingCount,
@@ -147,6 +284,7 @@ export async function GET(request: NextRequest) {
         reseller: resellerCount,
         sourced: sourcedCount,
       },
+      resellers: availableResellers || [],
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -161,10 +299,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const resellerId = await getResellerId(session.user.id);
-    if (!resellerId) {
+    const currentReseller = await getResellerInfo(session.user.id);
+    if (!currentReseller) {
       return NextResponse.json({ error: 'Reseller profile not found' }, { status: 404 });
     }
+    const resellerId = currentReseller._id;
 
     const body = await request.json();
     const { productId, retailPrice, variants } = body;

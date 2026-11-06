@@ -78,7 +78,8 @@ export async function PUT(
     const allowedFields = [
       'name', 'slug', 'description', 'price', 'salePrice', 'purchasePrice', 'resellerPrice', 'discountRate',
       'sku', 'barcode', 'stock', 'categories', 'brand', 'tags', 'images', 'batches',
-      'attributes', 'variants', 'isFeatured', 'isNewArrival', 'isFlashSale', 'isPublished', 'isShared', 'isMotherProduct', 'deliveryCharge'
+      'attributes', 'variants', 'isFeatured', 'isNewArrival', 'isFlashSale', 'isPublished', 'isShared', 'isMotherProduct', 'isApprovedByAdmin', 'deliveryCharge',
+      'metaTitle', 'metaDescription', 'videoUrl'
     ];
     const safeUpdate: any = {};
 
@@ -87,8 +88,19 @@ export async function PUT(
         let value = body[key];
 
         // Boolean coercion
-        if (['isFeatured', 'isNewArrival', 'isFlashSale', 'isPublished', 'isShared', 'isMotherProduct'].includes(key)) {
+        if (['isFeatured', 'isNewArrival', 'isFlashSale', 'isPublished', 'isShared', 'isMotherProduct', 'isApprovedByAdmin'].includes(key)) {
           value = Boolean(value);
+        }
+
+        // String handling for SEO and media
+        if (key === 'metaTitle') {
+          value = value ? String(value).slice(0, 70) : '';
+        }
+        if (key === 'metaDescription') {
+          value = value ? String(value).slice(0, 160) : '';
+        }
+        if (key === 'videoUrl') {
+          value = value ? String(value).trim() : '';
         }
 
         // Numeric coercion for main fields
@@ -158,6 +170,7 @@ export async function PUT(
     if (existingProduct.uploadedBy) {
       const allowedKeysForResellerProducts = [
         'isMotherProduct',
+        'isApprovedByAdmin',
         'price',
         'salePrice',
         'discountRate',
@@ -266,6 +279,28 @@ export async function PUT(
     // Trigger sync to reseller storefronts
     await triggerResellerSyncBestEffort(updatedProduct._id.toString());
 
+    // If Admin approved a reseller's product, notify the reseller
+    if (body.isApprovedByAdmin === true && updatedProduct.uploadedBy) {
+      try {
+        const Reseller = (await import('@/models/Reseller')).default;
+        const reseller = await Reseller.findById(updatedProduct.uploadedBy);
+        if (reseller) {
+          const { createNotification } = await import('@/lib/notifications');
+          await createNotification({
+            userId: reseller.userId,
+            resellerId: reseller._id,
+            title: '🚀 Product Approved!',
+            message: 'Your product "' + updatedProduct.name + '" has been approved and is now live in store.',
+            type: 'product',
+            link: '/reseller/products',
+            sendPush: true,
+          });
+        }
+      } catch (prodNotifErr) {
+        console.error('[Product Approval Notif Error]', prodNotifErr);
+      }
+    }
+
     revalidateTag('products', 'max');
 
     return NextResponse.json(updatedProduct);
@@ -340,6 +375,28 @@ export async function DELETE(
       // Mark unavailable on reseller storefronts
       const { unpublishProductFromResellers } = await import('@/lib/syncEngine');
       await unpublishProductFromResellers(deletedProduct._id.toString());
+
+      // Automatically clean up all product images from Cloudflare R2
+      try {
+        const { deleteMultipleFromR2 } = await import('@/lib/r2');
+        const imagesToDelete: string[] = [];
+        if (Array.isArray(deletedProduct.images)) {
+          imagesToDelete.push(...deletedProduct.images);
+        }
+        if ((deletedProduct as any).image) {
+          imagesToDelete.push((deletedProduct as any).image);
+        }
+        if (Array.isArray(deletedProduct.variants)) {
+          deletedProduct.variants.forEach((v: any) => {
+            if (v?.image) imagesToDelete.push(v.image);
+          });
+        }
+        if (imagesToDelete.length > 0) {
+          await deleteMultipleFromR2(imagesToDelete);
+        }
+      } catch (r2CleanErr) {
+        console.error('Failed to clean up product images from Cloudflare R2:', r2CleanErr);
+      }
     }
 
     try {

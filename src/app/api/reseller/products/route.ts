@@ -28,19 +28,73 @@ export async function GET(request: NextRequest) {
     const sp = request.nextUrl.searchParams;
     const page = parseInt(sp.get('page') || '1');
     const limit = parseInt(sp.get('limit') || '10');
-    const search = sp.get('search') || '';
+    const search = sp.get('search')?.trim() || '';
+    const tab = sp.get('tab') || 'all';
 
-    // Filter by uploadedBy (since Products store the reseller ID in uploadedBy)
-    const query: Record<string, any> = { uploadedBy: resellerId };
-    if (search) query.name = { $regex: search, $options: 'i' };
+    const andConditions: any[] = [{ uploadedBy: resellerId }];
 
-    const [products, total] = await Promise.all([
-      Product.find(query).populate('uploadedBy', 'storeName subdomain').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    if (search) {
+      andConditions.push({
+        $or: [
+          { name: { $regex: search, $options: 'i' } },
+          { sku: { $regex: search, $options: 'i' } }
+        ]
+      });
+    }
+
+    if (tab === 'approved') {
+      andConditions.push({ isApprovedByAdmin: true });
+    } else if (tab === 'pending' || tab === 'not_approved') {
+      andConditions.push({
+        $or: [
+          { isApprovedByAdmin: false },
+          { isApprovedByAdmin: { $exists: false } }
+        ]
+      });
+    } else if (tab === 'published') {
+      andConditions.push({ isPublished: true });
+    } else if (tab === 'draft') {
+      andConditions.push({ isPublished: false });
+    }
+
+    const query = andConditions.length > 0 ? { $and: andConditions } : {};
+
+    const baseAnd: any[] = [{ uploadedBy: resellerId }];
+    if (search) {
+      baseAnd.push({
+        $or: [
+          { name: { $regex: search, $options: 'i' } },
+          { sku: { $regex: search, $options: 'i' } }
+        ]
+      });
+    }
+
+    const [products, total, allCount, approvedCount, pendingCount, publishedCount, draftCount] = await Promise.all([
+      Product.find(query)
+        .populate('uploadedBy', 'storeName subdomain')
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
       Product.countDocuments(query),
+      Product.countDocuments({ $and: baseAnd }),
+      Product.countDocuments({ $and: [...baseAnd, { isApprovedByAdmin: true }] }),
+      Product.countDocuments({ $and: [...baseAnd, { $or: [{ isApprovedByAdmin: false }, { isApprovedByAdmin: { $exists: false } }] }] }),
+      Product.countDocuments({ $and: [...baseAnd, { isPublished: true }] }),
+      Product.countDocuments({ $and: [...baseAnd, { isPublished: false }] }),
     ]);
+
+    const counts = {
+      all: allCount,
+      approved: approvedCount,
+      pending: pendingCount,
+      published: publishedCount,
+      draft: draftCount,
+    };
 
     return NextResponse.json({
       products,
+      counts,
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (error: any) {
@@ -58,7 +112,7 @@ export async function POST(request: NextRequest) {
     const resellerId = await getResellerId(session.user.id);
     const body = await request.json();
 
-    const { name, slug, description, sku, barcode, categories, tags, images, attributes, variants, isFeatured, isNewArrival, isPublished, isShared, discountRate } = body;
+    const { name, slug, description, sku, barcode, categories, tags, images, attributes, variants, isFeatured, isNewArrival, isFlashSale, isPublished, isShared, discountRate } = body;
     let { price, salePrice, purchasePrice, resellerPrice, stock } = body;
 
     const parsedPrice = Number(price) || 0;
@@ -134,15 +188,60 @@ export async function POST(request: NextRequest) {
       variants: processedVariants.length > 0 ? processedVariants : (variants || []),
       isFeatured: !!isFeatured,
       isNewArrival: !!isNewArrival,
-      isPublished: isPublished !== undefined ? !!isPublished : true,
+      isFlashSale: isFlashSale !== undefined ? Boolean(isFlashSale) : false,
+      isPublished: body.isPublished !== undefined ? Boolean(body.isPublished) : true,
+      isApprovedByAdmin: false, // Default unapproved until Mother Shop approves
       isShared: isShared !== undefined ? !!isShared : false,
       isMotherProduct: false,
       uploadedBy: resellerId, // Set reseller ID as the owner
+      metaTitle: body.metaTitle ? String(body.metaTitle).slice(0, 70) : undefined,
+      metaDescription: body.metaDescription ? String(body.metaDescription).slice(0, 160) : undefined,
+      videoUrl: body.videoUrl ? String(body.videoUrl).trim() : undefined,
     });
 
     // Auto-link product to reseller's own storefront so it shows up in their store immediately
     const retailPrice = parsedSalePrice && parsedSalePrice > 0 ? parsedSalePrice : parsedPrice;
     await addProductToReseller(resellerId.toString(), newProduct._id.toString(), retailPrice);
+
+    // Trigger Admin & Reseller Notifications
+    try {
+      const { createAdminNotification, createNotification } = await import('@/lib/notifications');
+      await createAdminNotification({
+        title: '📦 New Product Approval Request',
+        message: `${(resellerDoc as any)?.storeName || (resellerDoc as any)?.name || 'Reseller'} submitted "${newProduct.name}" for admin approval.`,
+        type: 'product',
+        link: '/admin/products',
+        sendPush: true,
+      });
+
+      // Instant Telegram Alert for New Product Submission
+      try {
+        const { sendTelegramProductNotification } = await import('@/lib/telegram');
+        sendTelegramProductNotification({
+          resellerStoreName: (resellerDoc as any)?.storeName || (resellerDoc as any)?.name || 'Reseller Store',
+          productName: newProduct.name,
+          price: retailPrice,
+          stock: newProduct.stock,
+          category: (newProduct as any)?.category?.name || undefined,
+        }).catch(err => console.error('[Product Telegram Alert Error]', err));
+      } catch (tgErr) {
+        console.error('[Product Telegram Alert Import Error]', tgErr);
+      }
+
+      if (resellerDoc?.userId) {
+        await createNotification({
+          userId: resellerDoc.userId,
+          resellerId: resellerDoc._id,
+          title: '📦 Product Submitted for Review',
+          message: `Your product "${newProduct.name}" was submitted and is awaiting admin approval.`,
+          type: 'product',
+          link: '/reseller/products',
+          sendPush: false,
+        });
+      }
+    } catch (notifErr) {
+      console.error('[Reseller Product Notification Error]', notifErr);
+    }
 
     return NextResponse.json(newProduct, { status: 201 });
   } catch (error: any) {
@@ -163,6 +262,9 @@ export async function PATCH(request: NextRequest) {
     const id = sp.get('id');
     const body = await request.json();
 
+    // Prevent reseller from modifying admin approval
+    delete (body as any).isApprovedByAdmin;
+
     // Support both body.id and query param id
     const targetId = id || body.id;
     if (!targetId) return NextResponse.json({ error: 'Product ID required' }, { status: 400 });
@@ -170,7 +272,8 @@ export async function PATCH(request: NextRequest) {
     const allowedFields = [
       'name', 'slug', 'description', 'price', 'salePrice', 'purchasePrice', 'discountRate',
       'sku', 'barcode', 'stock', 'categories', 'tags', 'images', 'batches',
-      'attributes', 'variants', 'isFeatured', 'isNewArrival', 'isPublished', 'isShared', 'deliveryCharge'
+      'attributes', 'variants', 'isFeatured', 'isNewArrival', 'isFlashSale', 'isPublished', 'isShared', 'deliveryCharge',
+      'metaTitle', 'metaDescription', 'videoUrl'
     ];
     const updateData: any = {};
     Object.keys(body).forEach((key) => {
@@ -178,6 +281,32 @@ export async function PATCH(request: NextRequest) {
         updateData[key] = body[key];
       }
     });
+
+    if (updateData.isFlashSale !== undefined) {
+      updateData.isFlashSale = Boolean(updateData.isFlashSale);
+    }
+    if (updateData.isFeatured !== undefined) {
+      updateData.isFeatured = Boolean(updateData.isFeatured);
+    }
+    if (updateData.isNewArrival !== undefined) {
+      updateData.isNewArrival = Boolean(updateData.isNewArrival);
+    }
+    if (updateData.isPublished !== undefined) {
+      updateData.isPublished = Boolean(updateData.isPublished);
+    }
+    if (updateData.isShared !== undefined) {
+      updateData.isShared = Boolean(updateData.isShared);
+    }
+
+    if (updateData.metaTitle !== undefined) {
+      updateData.metaTitle = updateData.metaTitle ? String(updateData.metaTitle).slice(0, 70) : '';
+    }
+    if (updateData.metaDescription !== undefined) {
+      updateData.metaDescription = updateData.metaDescription ? String(updateData.metaDescription).slice(0, 160) : '';
+    }
+    if (updateData.videoUrl !== undefined) {
+      updateData.videoUrl = updateData.videoUrl ? String(updateData.videoUrl).trim() : '';
+    }
 
     const resellerDoc = await Reseller.findById(resellerId).lean();
     const settings = await GlobalSettings.findOne().lean();
@@ -264,27 +393,55 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const resellerId = await getResellerId(session.user.id);
-    const id = request.nextUrl.searchParams.get('id');
-    const existingProduct = await Product.findOne({ _id: id, uploadedBy: resellerId });
-    if (!existingProduct) return NextResponse.json({ error: 'Product not found or not owned by you' }, { status: 404 });
+    
+    // Support single id or multiple ids from query params or body
+    const body = await request.json().catch(() => ({}));
+    const queryId = request.nextUrl.searchParams.get('id');
+    const queryIds = request.nextUrl.searchParams.get('ids');
+    
+    let targetIds: string[] = [];
+    if (Array.isArray(body.ids) && body.ids.length > 0) {
+      targetIds = body.ids;
+    } else if (body.id) {
+      targetIds = [body.id];
+    } else if (queryIds) {
+      targetIds = queryIds.split(',').filter(Boolean);
+    } else if (queryId) {
+      targetIds = [queryId];
+    }
 
-    // Guard: Prevent deleting product if there are active / pending orders
+    if (targetIds.length === 0) {
+      return NextResponse.json({ error: 'No product ID(s) provided' }, { status: 400 });
+    }
+
     const Order = (await import('@/models/Order')).default;
     const ResellerOrder = (await import('@/models/ResellerOrder')).default;
-    const pId = existingProduct._id;
-    const pIdStr = existingProduct._id.toString();
-    const resellerProductIds = (await ResellerProduct.find({ productId: pId }).distinct('_id')) || [];
 
+    // Verify ownership
+    const productsToDelete = await Product.find({
+      _id: { $in: targetIds },
+      uploadedBy: resellerId,
+    });
+
+    if (productsToDelete.length === 0) {
+      return NextResponse.json({ error: 'No matching products found owned by you' }, { status: 404 });
+    }
+
+    const pIds = productsToDelete.map(p => p._id);
+    const pIdStrs = productsToDelete.map(p => p._id.toString());
+    const resellerProductIds = (await ResellerProduct.find({ productId: { $in: pIds } }).distinct('_id')) || [];
+
+    // Guard: check active orders
     const activeOrders = await Order.countDocuments({
-      'items.product': { $in: [pId, pIdStr] },
+      'items.product': { $in: [...pIds, ...pIdStrs] },
       status: { $nin: ['Delivered', 'Cancelled'] },
       deletedAt: null,
     });
 
     const activeResellerOrders = await ResellerOrder.countDocuments({
       $or: [
-        { 'items.productId': { $in: [pId, pIdStr] } },
-        { 'items.resellerProductId': { $in: [pId, pIdStr, ...resellerProductIds] } },
+        { 'items.productId': { $in: [...pIds, ...pIdStrs] } },
+        { 'items.resellerProductId': { $in: [...pIds, ...pIdStrs, ...resellerProductIds] } },
       ],
       status: { $nin: ['Delivered', 'Cancelled'] },
       deletedAt: null,
@@ -293,18 +450,55 @@ export async function DELETE(request: NextRequest) {
     const totalActiveOrders = activeOrders + activeResellerOrders;
     if (totalActiveOrders > 0) {
       return NextResponse.json({
-        error: `Cannot delete product: There are ${totalActiveOrders} active/pending order(s) for this product. Please complete or cancel the pending orders first, or unpublish it instead.`
+        error: `Cannot delete selected product(s): There are ${totalActiveOrders} active/pending order(s) for them. Please complete or cancel pending orders first, or unpublish instead.`
       }, { status: 400 });
     }
 
-    const deleted = await Product.findOneAndDelete({ _id: id, uploadedBy: resellerId });
-    if (!deleted) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+    const deleteResult = await Product.deleteMany({
+      _id: { $in: pIds },
+      uploadedBy: resellerId,
+    });
 
-    // Also delete any associated ResellerProduct records to avoid orphaned entries
-    await ResellerProduct.deleteMany({ productId: id });
+    await ResellerProduct.deleteMany({ productId: { $in: pIds } });
 
-    return NextResponse.json({ success: true, message: 'Product deleted successfully' });
+    // Automatically clean up all product images from Cloudflare R2
+    try {
+      const { deleteMultipleFromR2 } = await import('@/lib/r2');
+      const imagesToDelete: string[] = [];
+      productsToDelete.forEach((p: any) => {
+        if (Array.isArray(p.images)) {
+          imagesToDelete.push(...p.images);
+        }
+        if (p.image) {
+          imagesToDelete.push(p.image);
+        }
+        if (p.featuredImage) {
+          imagesToDelete.push(p.featuredImage);
+        }
+        if (p.thumbnail) {
+          imagesToDelete.push(p.thumbnail);
+        }
+        if (Array.isArray(p.variants)) {
+          p.variants.forEach((v: any) => {
+            if (v?.image) imagesToDelete.push(v.image);
+            if (Array.isArray(v?.images)) imagesToDelete.push(...v.images);
+          });
+        }
+      });
+
+      if (imagesToDelete.length > 0) {
+        await deleteMultipleFromR2(imagesToDelete);
+      }
+    } catch (r2CleanErr) {
+      console.error('Failed to clean up reseller product images from Cloudflare R2:', r2CleanErr);
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `Deleted ${deleteResult.deletedCount} product(s) successfully`,
+      deletedCount: deleteResult.deletedCount,
+    });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
   }
 }

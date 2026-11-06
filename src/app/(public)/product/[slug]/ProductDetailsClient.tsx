@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import ProductVideoThumbnailModal from '@/components/storefront/ProductVideoThumbnailModal';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { addToCart } from '@/store/slices/cartSlice';
 import { toggleWishlist } from '@/store/slices/wishlistSlice';
@@ -339,6 +340,12 @@ export default function ProductDetailsClient({ product }: ProductDetailsClientPr
         </div>
 
         <div className="flex gap-4 overflow-auto pb-2 scrollbar-none">
+          <ProductVideoThumbnailModal
+            videoUrl={product.videoUrl}
+            thumbnailImage={product.images?.[0]}
+            className="h-20 w-20 flex-shrink-0 rounded-md"
+            title={product.name}
+          />
           {product.images?.map((img: string, i: number) => (
             <button
               key={i}
@@ -407,7 +414,7 @@ export default function ProductDetailsClient({ product }: ProductDetailsClientPr
             <span className="text-3xl font-extrabold text-primary">
               ৳{Math.round(displaySalePrice || displayPrice)}
             </span>
-            {displaySalePrice && displaySalePrice !== displayPrice && (
+            {displaySalePrice && displayPrice > displaySalePrice && (
               <span className="text-xl text-muted-foreground line-through font-medium">
                 ৳{Math.round(displayPrice)}
               </span>

@@ -28,6 +28,7 @@ import {
   DollarSign,
   Users,
   Search,
+  Check,
   CreditCard,
   FileText,
   Package,
@@ -38,12 +39,15 @@ import {
   CalendarDays,
   Hash,
   MoreHorizontal,
-  Edit
+  Edit,
+  History,
+  Receipt,
+  Clock
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import Swal from 'sweetalert2';
-import { generateBillPDF } from '@/lib/bill-invoice-generator';
+import { generateBillPDF, generatePaymentReceiptPDF } from '@/lib/bill-invoice-generator';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,6 +59,7 @@ import { MobileDataCard, MobileDataRow } from '@/components/common/MobileDataCar
 
 interface BillItemInput {
   name: string;
+  description?: string;
   quantity: number;
   price: number;
 }
@@ -105,6 +110,12 @@ function ClientBillsContent() {
   const [selectedBill, setSelectedBill] = useState<any>(null);
   const [editingBill, setEditingBill] = useState<any>(null);
 
+  // Transaction history modal state
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedHistoryBill, setSelectedHistoryBill] = useState<any>(null);
+  const [historyData, setHistoryData] = useState<any>(null);
+
   // Dialog state
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [formLoading, setFormLoading] = useState(false);
@@ -112,9 +123,10 @@ function ClientBillsContent() {
   // Form states
   const [clientName, setClientName] = useState('');
   const [clientPhone, setClientPhone] = useState('');
+  const [clientEmail, setClientEmail] = useState('');
   const [clientAddress, setClientAddress] = useState('');
   const [billItems, setBillItems] = useState<BillItemInput[]>([
-    { name: '', quantity: 1, price: 0 }
+    { name: '', description: '', quantity: 1, price: 0 }
   ]);
   const [deliveryCharge, setDeliveryCharge] = useState<number>(0);
   const [serviceFee, setServiceFee] = useState<number>(0);
@@ -123,19 +135,97 @@ function ClientBillsContent() {
   const [prevDue, setPrevDue] = useState<number>(0);
   const [cashIn, setCashIn] = useState<number>(0);
   const [expectedReceivableDate, setExpectedReceivableDate] = useState('');
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
+  const [termsAndConditions, setTermsAndConditions] = useState('');
+  const [vatTaxIncluded, setVatTaxIncluded] = useState<boolean>(true);
 
   // Product multi-select state
   const [productSearchTerm, setProductSearchTerm] = useState('');
   const [selectedProductVariants, setSelectedProductVariants] = useState<Record<string, string | null>>({});
   const [productPickerOpen, setProductPickerOpen] = useState(false);
+  const [inlineProductSearch, setInlineProductSearch] = useState('');
+  const [showInlineSearchDropdown, setShowInlineSearchDropdown] = useState(false);
 
   // Phone validation
   const [phoneError, setPhoneError] = useState('');
+
+  // Auto suggestion states
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [activeSuggestions, setActiveSuggestions] = useState<any[]>([]);
+  const [showSuggestionsFor, setShowSuggestionsFor] = useState<'name' | 'email' | 'phone' | null>(null);
+
+  const fetchSuggestions = async () => {
+    try {
+      const res = await fetch('/api/admin/suggest-clients');
+      if (res.ok) {
+        const result = await res.json();
+        if (result.success) {
+          setSuggestions(result.data || []);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching client suggestions:', err);
+    }
+  };
+
+  const handleNameChange = (val: string) => {
+    setClientName(val);
+    if (!val.trim()) {
+      setActiveSuggestions([]);
+      setShowSuggestionsFor(null);
+      return;
+    }
+    const filtered = suggestions.filter(s =>
+      s.name?.toLowerCase().includes(val.toLowerCase())
+    );
+    setActiveSuggestions(filtered);
+    setShowSuggestionsFor('name');
+  };
+
+  const handlePhoneChange = (val: string) => {
+    setClientPhone(val);
+    if (phoneError) validatePhone(val);
+    if (!val.trim()) {
+      setActiveSuggestions([]);
+      setShowSuggestionsFor(null);
+      return;
+    }
+    const filtered = suggestions.filter(s =>
+      s.phone?.includes(val)
+    );
+    setActiveSuggestions(filtered);
+    setShowSuggestionsFor('phone');
+  };
+
+  const handleEmailChange = (val: string) => {
+    setClientEmail(val);
+    if (!val.trim()) {
+      setActiveSuggestions([]);
+      setShowSuggestionsFor(null);
+      return;
+    }
+    const filtered = suggestions.filter(s =>
+      s.email?.toLowerCase().includes(val.toLowerCase())
+    );
+    setActiveSuggestions(filtered);
+    setShowSuggestionsFor('email');
+  };
+
+  const handleSelectSuggestion = (suggestion: any) => {
+    setClientName(suggestion.name || '');
+    setClientPhone(suggestion.phone || '');
+    setClientEmail(suggestion.email || '');
+    setClientAddress(suggestion.address || '');
+    if (phoneError) setPhoneError('');
+    setActiveSuggestions([]);
+    setShowSuggestionsFor(null);
+  };
 
   useEffect(() => {
     fetchBills();
     fetchProducts();
     fetchSettings();
+    fetchSuggestions();
   }, [statusFilter]);
 
   const fetchBills = async () => {
@@ -222,12 +312,12 @@ function ClientBillsContent() {
       if (!prod) return;
 
       if (variantId === null) {
-        newItems.push({ name: prod.name, price: prod.salePrice || prod.price || 0, quantity: 1 });
+        newItems.push({ name: prod.name, description: '', price: prod.salePrice || prod.price || 0, quantity: 1 });
       } else {
         const variant = (prod.variants || []).find((v: any) => v._id === variantId);
         if (!variant) return;
         const label = [prod.name, variant.color, variant.size].filter(Boolean).join(' — ');
-        newItems.push({ name: label, price: variant.salePrice || variant.price || 0, quantity: 1 });
+        newItems.push({ name: label, description: '', price: variant.salePrice || variant.price || 0, quantity: 1 });
       }
     });
 
@@ -243,13 +333,44 @@ function ClientBillsContent() {
     setProductSearchTerm('');
   };
 
+  const handleAddProductDirect = (prod: any, variant?: any) => {
+    let name = prod.name;
+    let price = prod.salePrice || prod.price || 0;
+    const description = prod.description || '';
+
+    if (variant) {
+      const vLabel = [variant.color, variant.size].filter(Boolean).join(' / ');
+      if (vLabel) name = `${prod.name} (${vLabel})`;
+      if (variant.salePrice || variant.price) {
+        price = variant.salePrice || variant.price;
+      }
+    }
+
+    const newItem: BillItemInput = {
+      name,
+      description,
+      quantity: 1,
+      price
+    };
+
+    if (billItems.length === 1 && !billItems[0].name.trim() && (billItems[0].price === 0 || !billItems[0].price)) {
+      setBillItems([newItem]);
+    } else {
+      setBillItems(prev => [...prev, newItem]);
+    }
+
+    setInlineProductSearch('');
+    setShowInlineSearchDropdown(false);
+    toast.success(`Added "${name}"`);
+  };
+
   const handleAddItemRow = () => {
-    setBillItems([...billItems, { name: '', quantity: 1, price: 0 }]);
+    setBillItems([...billItems, { name: '', description: '', quantity: 1, price: 0 }]);
   };
 
   const handleRemoveItemRow = (index: number) => {
     if (billItems.length === 1) {
-      setBillItems([{ name: '', quantity: 1, price: 0 }]);
+      setBillItems([{ name: '', description: '', quantity: 1, price: 0 }]);
     } else {
       setBillItems(billItems.filter((_, i) => i !== index));
     }
@@ -261,6 +382,8 @@ function ClientBillsContent() {
       updated[index].quantity = Math.max(1, parseInt(value) || 1);
     } else if (field === 'price') {
       updated[index].price = Math.max(0, parseFloat(value) || 0);
+    } else if (field === 'description') {
+      updated[index].description = value;
     } else {
       updated[index].name = value;
     }
@@ -294,6 +417,7 @@ function ClientBillsContent() {
       const billData = {
         clientName,
         clientPhone,
+        clientEmail: clientEmail.trim() || undefined,
         clientAddress,
         items: validItems,
         subtotal,
@@ -309,6 +433,9 @@ function ClientBillsContent() {
         currentBillDue,
         status: calculatedStatus,
         expectedReceivableDate: calculatedStatus === 'Due' ? expectedReceivableDate : undefined,
+        expectedDeliveryDate: expectedDeliveryDate || undefined,
+        termsAndConditions: termsAndConditions.trim() || undefined,
+        vatTaxIncluded: Boolean(vatTaxIncluded),
         documentType: 'bill'
       };
 
@@ -331,6 +458,7 @@ function ClientBillsContent() {
       setIsCreateOpen(false);
       resetForm();
       fetchBills();
+      fetchSuggestions();
     } catch (error: any) {
       toast.error(error.message || 'Error saving bill');
     } finally {
@@ -341,9 +469,12 @@ function ClientBillsContent() {
   const resetForm = () => {
     setClientName('');
     setClientPhone('');
+    setClientEmail('');
     setPhoneError('');
     setClientAddress('');
-    setBillItems([{ name: '', quantity: 1, price: 0 }]);
+    setActiveSuggestions([]);
+    setShowSuggestionsFor(null);
+    setBillItems([{ name: '', description: '', quantity: 1, price: 0 }]);
     setDeliveryCharge(0);
     setServiceFee(0);
     setDiscountType('fixed');
@@ -351,6 +482,9 @@ function ClientBillsContent() {
     setPrevDue(0);
     setCashIn(0);
     setExpectedReceivableDate('');
+    setExpectedDeliveryDate('');
+    setTermsAndConditions('');
+    setVatTaxIncluded(true);
     setSelectedProductVariants({});
     setProductSearchTerm('');
     setProductPickerOpen(false);
@@ -394,9 +528,31 @@ function ClientBillsContent() {
         if (!res.ok) throw new Error('Failed to update bill');
         toast.success('Payment updated successfully');
         fetchBills();
+        if (selectedHistoryBill && selectedHistoryBill._id === billId) {
+          handleOpenTransactionHistory({ ...bill, cashIn: newCashIn, currentBillDue: newDue, status: newStatus });
+        }
       } catch (error) {
         toast.error('Failed to update payment');
       }
+    }
+  };
+
+  const handleOpenTransactionHistory = async (bill: any) => {
+    setSelectedHistoryBill(bill);
+    setHistoryModalOpen(true);
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/admin/bills/${bill._id}/transactions`);
+      if (!res.ok) throw new Error('Failed to load transaction history');
+      const data = await res.json();
+      setHistoryData(data);
+      if (data.bill) {
+        setSelectedHistoryBill(data.bill);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Error loading transaction history');
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
@@ -659,15 +815,19 @@ function ClientBillsContent() {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => setSelectedBill(bill)}>
-                                <Eye className="mr-2 h-4 w-4" /> View Details
+                                <Eye className="mr-2 h-4 w-4 text-indigo-600" /> View Details
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleOpenTransactionHistory(bill)}>
+                                <History className="mr-2 h-4 w-4 text-purple-600" /> Payment History
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => {
                                   setEditingBill(bill);
                                   setClientName(bill.clientName);
                                   setClientPhone(bill.clientPhone);
+                                  setClientEmail(bill.clientEmail || '');
                                   setClientAddress(bill.clientAddress);
-                                  setBillItems(bill.items);
+                                  setBillItems(bill.items && bill.items.length > 0 ? bill.items : [{ name: '', description: '', quantity: 1, price: 0 }]);
                                   setDeliveryCharge(bill.deliveryCharge);
                                   setServiceFee(bill.serviceFee || 0);
                                   setDiscountType(bill.discountType || 'fixed');
@@ -675,6 +835,9 @@ function ClientBillsContent() {
                                   setPrevDue(bill.prevDue || 0);
                                   setCashIn(bill.cashIn || 0);
                                   setExpectedReceivableDate(bill.expectedReceivableDate ? format(new Date(bill.expectedReceivableDate), 'yyyy-MM-dd') : '');
+                                  setExpectedDeliveryDate(bill.expectedDeliveryDate ? format(new Date(bill.expectedDeliveryDate), 'yyyy-MM-dd') : '');
+                                  setTermsAndConditions(bill.termsAndConditions || '');
+                                  setVatTaxIncluded(bill.vatTaxIncluded !== undefined ? bill.vatTaxIncluded : true);
                                   setIsCreateOpen(true);
                                 }}
                               >
@@ -775,13 +938,20 @@ function ClientBillsContent() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setSelectedBill(bill)}>
+                          <Eye className="mr-2 h-4 w-4 text-indigo-600" /> View Details
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleOpenTransactionHistory(bill)}>
+                          <History className="mr-2 h-4 w-4 text-purple-600" /> Payment History
+                        </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => {
                             setEditingBill(bill);
                             setClientName(bill.clientName);
                             setClientPhone(bill.clientPhone);
+                            setClientEmail(bill.clientEmail || '');
                             setClientAddress(bill.clientAddress);
-                            setBillItems(bill.items);
+                            setBillItems(bill.items && bill.items.length > 0 ? bill.items : [{ name: '', description: '', quantity: 1, price: 0 }]);
                             setDeliveryCharge(bill.deliveryCharge);
                             setServiceFee(bill.serviceFee || 0);
                             setDiscountType(bill.discountType || 'fixed');
@@ -789,6 +959,9 @@ function ClientBillsContent() {
                             setPrevDue(bill.prevDue || 0);
                             setCashIn(bill.cashIn || 0);
                             setExpectedReceivableDate(bill.expectedReceivableDate ? format(new Date(bill.expectedReceivableDate), 'yyyy-MM-dd') : '');
+                            setExpectedDeliveryDate(bill.expectedDeliveryDate ? format(new Date(bill.expectedDeliveryDate), 'yyyy-MM-dd') : '');
+                            setTermsAndConditions(bill.termsAndConditions || '');
+                            setVatTaxIncluded(bill.vatTaxIncluded !== undefined ? bill.vatTaxIncluded : true);
                             setIsCreateOpen(true);
                           }}
                         >
@@ -830,35 +1003,106 @@ function ClientBillsContent() {
             <DialogTitle>{editingBill ? 'Edit' : 'Generate'} Client Bill</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-            {/* Client Info */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="space-y-1">
+            {/* Client Info with Auto Suggestion */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Client Name */}
+              <div className="space-y-1 relative">
                 <Label htmlFor="clientName" className="text-xs">Client Name *</Label>
                 <Input
                   id="clientName"
                   value={clientName}
-                  onChange={(e) => setClientName(e.target.value)}
+                  onChange={(e) => handleNameChange(e.target.value)}
+                  onBlur={() => setTimeout(() => setShowSuggestionsFor(null), 250)}
                   placeholder="e.g. Rahim Khan"
-                  className="h-8 text-xs"
+                  className="h-8 text-xs bg-background"
                   required
+                  autoComplete="off"
                 />
+                {showSuggestionsFor === 'name' && activeSuggestions.length > 0 && (
+                  <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-popover text-popover-foreground border rounded-md shadow-xl max-h-56 overflow-y-auto divide-y min-w-[240px]">
+                    {activeSuggestions.map((s, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => handleSelectSuggestion(s)}
+                        className="p-2.5 text-xs hover:bg-accent hover:text-accent-foreground cursor-pointer transition-colors"
+                      >
+                        <div className="font-bold">{s.name}</div>
+                        <div className="text-muted-foreground text-[11px]">
+                          {s.phone ? `Phone: ${s.phone}` : ''} {s.email ? `| Email: ${s.email}` : ''}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="space-y-1">
+
+              {/* Client Phone */}
+              <div className="space-y-1 relative">
                 <Label htmlFor="clientPhone" className="text-xs">Client Phone *</Label>
                 <Input
                   id="clientPhone"
                   value={clientPhone}
-                  onChange={(e) => {
-                    setClientPhone(e.target.value);
-                    if (phoneError) validatePhone(e.target.value);
+                  onChange={(e) => handlePhoneChange(e.target.value)}
+                  onBlur={(e) => {
+                    validatePhone(e.target.value);
+                    setTimeout(() => setShowSuggestionsFor(null), 250);
                   }}
-                  onBlur={(e) => validatePhone(e.target.value)}
                   placeholder="e.g. 01712345678"
-                  className={`h-8 text-xs ${phoneError ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                  className={`h-8 text-xs bg-background ${phoneError ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                   required
+                  autoComplete="off"
                 />
                 {phoneError && <p className="text-[10px] text-destructive">{phoneError}</p>}
+                {showSuggestionsFor === 'phone' && activeSuggestions.length > 0 && (
+                  <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-popover text-popover-foreground border rounded-md shadow-xl max-h-56 overflow-y-auto divide-y min-w-[240px]">
+                    {activeSuggestions.map((s, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => handleSelectSuggestion(s)}
+                        className="p-2.5 text-xs hover:bg-accent hover:text-accent-foreground cursor-pointer transition-colors"
+                      >
+                        <div className="font-bold">{s.phone}</div>
+                        <div className="text-muted-foreground text-[11px]">
+                          {s.name} {s.email ? `| ${s.email}` : ''}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
+
+              {/* Client Email */}
+              <div className="space-y-1 relative">
+                <Label htmlFor="clientEmail" className="text-xs">Client Email <span className="text-muted-foreground font-normal text-[10px]">— Optional</span></Label>
+                <Input
+                  id="clientEmail"
+                  type="email"
+                  value={clientEmail}
+                  onChange={(e) => handleEmailChange(e.target.value)}
+                  onBlur={() => setTimeout(() => setShowSuggestionsFor(null), 250)}
+                  placeholder="e.g. client@example.com"
+                  className="h-8 text-xs bg-background"
+                  autoComplete="off"
+                />
+                {showSuggestionsFor === 'email' && activeSuggestions.length > 0 && (
+                  <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-popover text-popover-foreground border rounded-md shadow-xl max-h-56 overflow-y-auto divide-y min-w-[240px]">
+                    {activeSuggestions.map((s, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => handleSelectSuggestion(s)}
+                        className="p-2.5 text-xs hover:bg-accent hover:text-accent-foreground cursor-pointer transition-colors"
+                      >
+                        <div className="font-bold">{s.email}</div>
+                        <div className="text-muted-foreground text-[11px]">
+                          {s.name} {s.phone ? `| ${s.phone}` : ''}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Client Address */}
               <div className="space-y-1">
                 <Label htmlFor="clientAddress" className="text-xs">Client Address *</Label>
                 <Input
@@ -866,14 +1110,14 @@ function ClientBillsContent() {
                   value={clientAddress}
                   onChange={(e) => setClientAddress(e.target.value)}
                   placeholder="e.g. Nawabpur, Dhaka"
-                  className="h-8 text-xs"
+                  className="h-8 text-xs bg-background"
                   required
                 />
               </div>
             </div>
 
-            {/* Bill Items header */}
-            <div className="space-y-2">
+            {/* Bill Items header & Smart Search */}
+            <div className="space-y-2.5">
               <div className="flex justify-between items-center">
                 <h4 className="font-bold text-xs">Bill Items</h4>
                 <div className="flex items-center gap-2">
@@ -891,34 +1135,152 @@ function ClientBillsContent() {
                   </Button>
                 </div>
               </div>
-              <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
+
+              {/* Smart Search & Add Product (Manual Order Style) */}
+              <div className="relative">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Search product by name or SKU to add..."
+                    value={inlineProductSearch}
+                    onChange={(e) => {
+                      setInlineProductSearch(e.target.value);
+                      setShowInlineSearchDropdown(true);
+                    }}
+                    onFocus={() => setShowInlineSearchDropdown(true)}
+                    className="pl-8 h-8 text-xs bg-background"
+                  />
+                  {inlineProductSearch && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInlineProductSearch('');
+                        setShowInlineSearchDropdown(false);
+                      }}
+                      className="absolute right-2 top-1.5 text-muted-foreground hover:text-foreground text-sm font-bold"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                {showInlineSearchDropdown && inlineProductSearch.trim() && (
+                  <div className="absolute z-50 left-0 right-0 mt-1 bg-popover text-popover-foreground border rounded-lg shadow-xl max-h-60 overflow-y-auto divide-y">
+                    {products.filter(p =>
+                      p.name?.toLowerCase().includes(inlineProductSearch.toLowerCase()) ||
+                      p.sku?.toLowerCase().includes(inlineProductSearch.toLowerCase())
+                    ).length === 0 ? (
+                      <div className="p-3 text-center text-xs text-muted-foreground">
+                        No products found matching &quot;{inlineProductSearch}&quot;
+                      </div>
+                    ) : (
+                      products.filter(p =>
+                        p.name?.toLowerCase().includes(inlineProductSearch.toLowerCase()) ||
+                        p.sku?.toLowerCase().includes(inlineProductSearch.toLowerCase())
+                      ).map((prod) => (
+                        <div
+                          key={prod._id}
+                          className="p-2.5 hover:bg-accent/60 transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold text-xs text-foreground truncate">{prod.name}</p>
+                              <p className="text-[11px] text-muted-foreground">
+                                {prod.sku ? `SKU: ${prod.sku}` : ''} {prod.stock !== undefined ? `| Stock: ${prod.stock}` : ''}
+                              </p>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className="text-xs font-bold text-primary block">৳{prod.salePrice || prod.price || 0}</span>
+                              {(!prod.variants || prod.variants.length === 0) && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  onClick={() => {
+                                    handleAddProductDirect(prod);
+                                    setInlineProductSearch('');
+                                    setShowInlineSearchDropdown(false);
+                                  }}
+                                  className="h-6 text-[10px] px-2 mt-1 bg-primary text-primary-foreground font-bold"
+                                >
+                                  <Plus className="h-3 w-3 mr-0.5" /> Add
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+
+                          {prod.variants && prod.variants.length > 0 && (
+                            <div className="mt-2 pt-1.5 border-t border-border/40 flex flex-wrap gap-1 items-center">
+                              <span className="text-[10px] text-muted-foreground mr-1">Variants:</span>
+                              {prod.variants.map((v: any) => {
+                                const vLabel = [v.color, v.size].filter(Boolean).join(' / ') || 'Option';
+                                const vPrice = v.salePrice || v.price || prod.salePrice || prod.price || 0;
+                                return (
+                                  <Button
+                                    key={v._id}
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      handleAddProductDirect(prod, v);
+                                      setInlineProductSearch('');
+                                      setShowInlineSearchDropdown(false);
+                                    }}
+                                    className="h-6 text-[10px] px-2 hover:bg-primary hover:text-primary-foreground"
+                                  >
+                                    <Plus className="h-2.5 w-2.5 mr-0.5" />
+                                    {vLabel} (৳{vPrice})
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
                 {billItems.map((item, index) => (
-                  <div key={index} className="flex gap-1.5 items-center">
-                    <Input
-                      placeholder="Item Description"
-                      value={item.name}
-                      onChange={(e) => handleItemChange(index, 'name', e.target.value)}
-                      className="flex-1 h-8 text-xs"
-                      required
-                    />
-                    <Input
-                      type="number"
-                      placeholder="Qty"
-                      value={item.quantity}
-                      onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
-                      className="w-16 h-8 text-xs text-center"
-                      min="1"
-                      required
-                    />
-                    <Input
-                      type="number"
-                      placeholder="Rate"
-                      value={item.price || ''}
-                      onChange={(e) => handleItemChange(index, 'price', e.target.value)}
-                      className="w-24 h-8 text-xs text-right"
-                      min="0"
-                      required
-                    />
+                  <div key={index} className="flex gap-2 items-center bg-muted/20 p-1.5 rounded-md border">
+                    <div className="flex-1 space-y-1">
+                      <Input
+                        placeholder="Title"
+                        value={item.name}
+                        onChange={(e) => handleItemChange(index, 'name', e.target.value)}
+                        className="h-8 text-xs font-medium"
+                        required
+                      />
+                      <Input
+                        placeholder="Description (Optional)"
+                        value={item.description || ''}
+                        onChange={(e) => handleItemChange(index, 'description', e.target.value)}
+                        className="h-7 text-[11px] text-muted-foreground"
+                      />
+                    </div>
+                    <div className="w-16">
+                      <Input
+                        type="number"
+                        placeholder="Qty"
+                        value={item.quantity}
+                        onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                        className="h-8 text-xs text-center"
+                        min="1"
+                        required
+                      />
+                    </div>
+                    <div className="w-24">
+                      <Input
+                        type="number"
+                        placeholder="Rate"
+                        value={item.price || ''}
+                        onChange={(e) => handleItemChange(index, 'price', e.target.value)}
+                        className="h-8 text-xs text-right"
+                        min="0"
+                        required
+                      />
+                    </div>
                     <Button
                       type="button"
                       variant="ghost"
@@ -1017,19 +1379,54 @@ function ClientBillsContent() {
                   </div>
                 </div>
 
-                {calculatedStatus === 'Due' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-center">
+                  {calculatedStatus === 'Due' ? (
+                    <div className="space-y-1">
+                      <Label htmlFor="expectedReceivableDate" className="text-xs">Expected Receivable Date *</Label>
+                      <Input
+                        id="expectedReceivableDate"
+                        type="date"
+                        value={expectedReceivableDate}
+                        onChange={(e) => setExpectedReceivableDate(e.target.value)}
+                        required
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                  ) : <div />}
+                  <div className={`flex items-center space-x-2 ${calculatedStatus === 'Due' ? 'pt-4' : 'pt-2'}`}>
+                    <Checkbox
+                      id="vatTaxIncluded"
+                      checked={vatTaxIncluded}
+                      onCheckedChange={(checked) => setVatTaxIncluded(checked === true)}
+                    />
+                    <Label htmlFor="vatTaxIncluded" className="text-xs font-medium leading-none cursor-pointer">
+                      VAT &amp; Tax Included
+                    </Label>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-1">
                   <div className="space-y-1">
-                    <Label htmlFor="expectedReceivableDate" className="text-xs">Expected Receivable Date *</Label>
+                    <Label htmlFor="expectedDeliveryDate" className="text-xs">Expected Delivery Date <span className="text-muted-foreground font-normal text-[10px]">— Optional</span></Label>
                     <Input
-                      id="expectedReceivableDate"
+                      id="expectedDeliveryDate"
                       type="date"
-                      value={expectedReceivableDate}
-                      onChange={(e) => setExpectedReceivableDate(e.target.value)}
-                      required
+                      value={expectedDeliveryDate}
+                      onChange={(e) => setExpectedDeliveryDate(e.target.value)}
                       className="h-8 text-xs"
                     />
                   </div>
-                )}
+                  <div className="space-y-1">
+                    <Label htmlFor="termsAndConditions" className="text-xs">Terms &amp; Conditions <span className="text-muted-foreground font-normal text-[10px]">— Optional</span></Label>
+                    <textarea
+                      id="termsAndConditions"
+                      placeholder="Enter terms and conditions (optional)..."
+                      value={termsAndConditions}
+                      onChange={(e) => setTermsAndConditions(e.target.value)}
+                      className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </div>
+                </div>
               </div>
 
               {/* Summary calculations view */}
@@ -1092,86 +1489,160 @@ function ClientBillsContent() {
         </DialogContent>
       </Dialog>
 
-      {/* Product Selection Dialog */}
+      {/* Product Selection Dialog - Card System (Fits inside modal) */}
       <Dialog open={productPickerOpen} onOpenChange={setProductPickerOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Select Products</DialogTitle>
+        <DialogContent className="max-w-3xl w-[95vw] max-h-[85vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="p-4 pb-2 border-b">
+            <DialogTitle className="text-base font-bold flex items-center justify-between">
+              <span>Select Products</span>
+              <span className="text-xs font-normal text-muted-foreground">
+                {products.length} products available
+              </span>
+            </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 text-xs">
+
+          <div className="p-4 space-y-3 flex-1 overflow-hidden flex flex-col">
             <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Search products..."
-                className="pl-8 h-8 text-xs"
+                placeholder="Search products by title or SKU..."
+                className="pl-9 h-9 text-xs"
                 value={productSearchTerm}
                 onChange={(e) => setProductSearchTerm(e.target.value)}
               />
             </div>
-            <div className="border rounded-md overflow-hidden max-h-[50vh] overflow-y-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10 text-xs">Select</TableHead>
-                    <TableHead className="text-xs">Product</TableHead>
-                    <TableHead className="text-xs">Options / Variants</TableHead>
-                    <TableHead className="text-right text-xs">Price</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {products
-                    .filter(p => p.name.toLowerCase().includes(productSearchTerm.toLowerCase()))
-                    .map((prod) => {
-                      const hasVariants = prod.variants && prod.variants.length > 0;
-                      return (
-                        <TableRow key={prod._id}>
-                          <TableCell>
-                            {!hasVariants && (
-                              <Checkbox
-                                checked={selectedProductVariants[prod._id] === null}
-                                onCheckedChange={() => toggleProductVariant(prod._id, null)}
-                              />
-                            )}
-                          </TableCell>
-                          <TableCell className="font-medium text-xs">{prod.name}</TableCell>
-                          <TableCell>
-                            {hasVariants ? (
-                              <div className="flex flex-wrap gap-1.5 py-1">
-                                {prod.variants.map((v: any) => {
-                                  const label = [v.color, v.size].filter(Boolean).join(' / ');
-                                  const isSelected = selectedProductVariants[prod._id] === v._id;
-                                  return (
-                                    <Button
-                                      key={v._id}
-                                      type="button"
-                                      variant={isSelected ? 'default' : 'outline'}
-                                      size="sm"
-                                      onClick={() => toggleProductVariant(prod._id, v._id)}
-                                      className="text-[10px] py-0.5 px-2 h-6"
-                                    >
-                                      {label} (৳{v.salePrice || v.price})
-                                    </Button>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <span className="text-[10px] text-muted-foreground">Standard Item</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right text-xs font-semibold">
-                            {!hasVariants && `৳${prod.salePrice || prod.price}`}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                </TableBody>
-              </Table>
+
+            {/* Product Cards List - Fits 100% inside modal without horizontal scroll */}
+            <div className="flex-1 overflow-y-auto pr-1 space-y-2.5">
+              {products
+                .filter(p =>
+                  p.name.toLowerCase().includes(productSearchTerm.toLowerCase()) ||
+                  p.sku?.toLowerCase().includes(productSearchTerm.toLowerCase())
+                )
+                .length === 0 ? (
+                <div className="py-12 text-center text-muted-foreground text-xs border rounded-lg bg-muted/10">
+                  <Package className="h-8 w-8 mx-auto mb-2 text-muted-foreground/60 stroke-1" />
+                  No products found matching &quot;{productSearchTerm}&quot;
+                </div>
+              ) : (
+                products
+                  .filter(p =>
+                    p.name.toLowerCase().includes(productSearchTerm.toLowerCase()) ||
+                    p.sku?.toLowerCase().includes(productSearchTerm.toLowerCase())
+                  )
+                  .map((prod) => {
+                    const hasVariants = prod.variants && prod.variants.length > 0;
+                    const isBaseSelected = selectedProductVariants[prod._id] === null;
+                    const selectedVariantId = selectedProductVariants[prod._id];
+                    const isCardActive = isBaseSelected || (hasVariants && selectedVariantId);
+
+                    return (
+                      <div
+                        key={prod._id}
+                        className={`p-3 rounded-lg border transition-all text-xs ${
+                          isCardActive
+                            ? 'border-primary/60 bg-primary/5 shadow-xs'
+                            : 'border-border bg-card hover:border-primary/30 hover:bg-muted/30'
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="space-y-0.5 flex-1 min-w-0">
+                            <h4 className="font-semibold text-foreground text-sm leading-tight break-words">
+                              {prod.name}
+                            </h4>
+                            <div className="flex items-center gap-2 text-muted-foreground text-xs">
+                              {prod.sku && <span>SKU: {prod.sku}</span>}
+                              <span>Base Rate:</span>
+                              <span className="font-bold text-foreground">৳{Math.round(prod.salePrice || prod.price || 0).toLocaleString()}</span>
+                            </div>
+                          </div>
+
+                          {!hasVariants && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={isBaseSelected ? 'default' : 'outline'}
+                              onClick={() => toggleProductVariant(prod._id, null)}
+                              className={`h-8 text-xs font-semibold shrink-0 sm:self-center ${
+                                isBaseSelected ? 'bg-primary text-primary-foreground' : ''
+                              }`}
+                            >
+                              {isBaseSelected ? (
+                                <>
+                                  <Check className="h-3.5 w-3.5 mr-1" /> Selected
+                                </>
+                              ) : (
+                                <>
+                                  <Plus className="h-3.5 w-3.5 mr-1" /> Select (৳{Math.round(prod.salePrice || prod.price || 0)})
+                                </>
+                              )}
+                            </Button>
+                          )}
+                        </div>
+
+                        {hasVariants && (
+                          <div className="mt-2.5 pt-2 border-t border-border/50">
+                            <span className="text-[11px] font-medium text-muted-foreground block mb-1.5">
+                              Available Variants:
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {prod.variants.map((v: any) => {
+                                const variantSelected = selectedVariantId === v._id;
+                                const label = [v.color, v.size].filter(Boolean).join(' / ') || 'Option';
+                                const price = Math.round(v.salePrice || v.price || prod.salePrice || prod.price || 0);
+
+                                return (
+                                  <Button
+                                    key={v._id}
+                                    type="button"
+                                    variant={variantSelected ? 'default' : 'outline'}
+                                    size="sm"
+                                    onClick={() => toggleProductVariant(prod._id, v._id)}
+                                    className={`h-7 text-xs px-2.5 font-medium transition-all ${
+                                      variantSelected
+                                        ? 'bg-primary text-primary-foreground shadow-xs'
+                                        : 'bg-background hover:bg-muted text-foreground'
+                                    }`}
+                                  >
+                                    {variantSelected && <Check className="h-3 w-3 mr-1" />}
+                                    <span>{label}</span>
+                                    <span className="ml-1.5 font-bold opacity-90">৳{price.toLocaleString()}</span>
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+              )}
             </div>
-            <div className="flex items-center justify-between border-t pt-3">
-              <span className="text-xs text-muted-foreground">{selectedCount} items selected</span>
-              <div className="space-x-2">
-                <Button variant="outline" size="sm" onClick={() => setProductPickerOpen(false)}>Cancel</Button>
-                <Button size="sm" onClick={handleAddSelectedProducts} className="bg-primary text-primary-foreground font-bold">Add Selected</Button>
+
+            {/* Bottom Footer Actions */}
+            <div className="flex items-center justify-between border-t pt-3 mt-1">
+              <span className="text-xs font-medium text-muted-foreground">
+                <span className="font-bold text-foreground">{selectedCount}</span> item{selectedCount === 1 ? '' : 's'} selected
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setProductPickerOpen(false)}
+                  className="h-8 text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleAddSelectedProducts}
+                  disabled={selectedCount === 0}
+                  className="h-8 text-xs font-bold bg-primary text-primary-foreground"
+                >
+                  Add Selected ({selectedCount})
+                </Button>
               </div>
             </div>
           </div>
@@ -1231,6 +1702,15 @@ function ClientBillsContent() {
                         <span className="text-orange-600">Due by: {format(new Date(selectedBill.expectedReceivableDate), 'dd MMM yyyy')}</span>
                       </div>
                     )}
+                    {selectedBill.expectedDeliveryDate && (
+                      <div className="flex items-center gap-2">
+                        <CalendarDays className="h-3.5 w-3.5 text-teal-600 shrink-0" />
+                        <span className="text-teal-700">Delivery by: {format(new Date(selectedBill.expectedDeliveryDate), 'dd MMM yyyy')}</span>
+                      </div>
+                    )}
+                    <div className="text-[11px] text-muted-foreground pt-0.5">
+                      VAT &amp; Tax: <span className="font-semibold">{selectedBill.vatTaxIncluded !== false ? 'Included' : 'Excluded'}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -1253,11 +1733,16 @@ function ClientBillsContent() {
                     <tbody className="divide-y">
                       {(selectedBill.items || []).map((item: any, idx: number) => (
                         <tr key={idx} className={idx % 2 === 0 ? 'bg-background' : 'bg-muted/20'}>
-                          <td className="px-3 py-1.5 text-muted-foreground">{idx + 1}</td>
-                          <td className="px-3 py-1.5 font-medium">{item.name}</td>
-                          <td className="px-3 py-1.5 text-center">{item.quantity}</td>
-                          <td className="px-3 py-1.5 text-right">{Math.round(item.price).toLocaleString()}</td>
-                          <td className="px-3 py-1.5 text-right font-semibold">{Math.round(item.price * item.quantity).toLocaleString()}</td>
+                          <td className="px-3 py-1.5 text-muted-foreground align-top">{idx + 1}</td>
+                          <td className="px-3 py-1.5 align-top">
+                            <div className="font-medium">{item.name}</div>
+                            {item.description && (
+                              <div className="text-[10px] text-muted-foreground mt-0.5 whitespace-pre-wrap">{item.description}</div>
+                            )}
+                          </td>
+                          <td className="px-3 py-1.5 text-center align-top">{item.quantity}</td>
+                          <td className="px-3 py-1.5 text-right align-top">{Math.round(item.price).toLocaleString()}</td>
+                          <td className="px-3 py-1.5 text-right font-semibold align-top">{Math.round(item.price * item.quantity).toLocaleString()}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1320,8 +1805,32 @@ function ClientBillsContent() {
                   </div>
                 </div>
 
+                {selectedBill.termsAndConditions && (
+                  <div className="bg-muted/20 border rounded-lg p-3 space-y-1 text-xs">
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Terms &amp; Conditions</p>
+                    <div className="text-muted-foreground whitespace-pre-wrap italic">{selectedBill.termsAndConditions}</div>
+                  </div>
+                )}
+
                 {/* Action Buttons */}
-                <div className="flex gap-2 pt-1">
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    variant="outline"
+                    className="flex-1 font-bold h-8 text-xs text-purple-700 border-purple-200 hover:bg-purple-50"
+                    onClick={() => {
+                      setSelectedBill(null);
+                      handleOpenTransactionHistory(selectedBill);
+                    }}
+                  >
+                    <History className="h-3.5 w-3.5 mr-1.5" /> Payment History
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="flex-1 font-bold h-8 text-xs text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                    onClick={() => generatePaymentReceiptPDF(selectedBill, settings)}
+                  >
+                    <Printer className="h-3.5 w-3.5 mr-1.5" /> Receipt
+                  </Button>
                   <Button
                     className="flex-1 font-bold h-8 text-xs"
                     onClick={() => generateBillPDF(selectedBill, settings, 'download')}
@@ -1338,6 +1847,201 @@ function ClientBillsContent() {
                 </div>
               </div>
             </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Bill Payment & Transaction History Modal ── */}
+      <Dialog open={historyModalOpen} onOpenChange={(open) => { setHistoryModalOpen(open); if (!open) { setHistoryData(null); setSelectedHistoryBill(null); } }}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl font-bold">
+              <History className="h-5 w-5 text-purple-600" />
+              Payment & Transaction History
+              {selectedHistoryBill && (
+                <Badge variant="outline" className="font-mono text-sm bg-purple-50 text-purple-700 border-purple-200">
+                  #{selectedHistoryBill.invoiceNo}
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+
+          {historyLoading ? (
+            <div className="flex flex-col items-center justify-center py-14 space-y-3">
+              <Loader2 className="h-8 w-8 animate-spin text-purple-600" />
+              <p className="text-sm text-muted-foreground">Loading transaction records...</p>
+            </div>
+          ) : selectedHistoryBill && (
+            <div className="space-y-5 pt-1">
+              {/* Client & Bill Info Card */}
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/40 p-4 rounded-xl border">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <User className="h-4 w-4 text-primary" />
+                    <span className="font-bold text-base">{selectedHistoryBill.clientName}</span>
+                    <Badge variant={selectedHistoryBill.status === 'Paid' ? 'default' : 'destructive'} className={selectedHistoryBill.status === 'Paid' ? 'bg-green-600 text-white border-none' : ''}>
+                      {selectedHistoryBill.status}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+                    <span className="flex items-center gap-1"><Phone className="h-3 w-3" /> {selectedHistoryBill.clientPhone}</span>
+                    <span>•</span>
+                    <span className="flex items-center gap-1"><CalendarDays className="h-3 w-3" /> Bill Date: {format(new Date(selectedHistoryBill.date), 'dd MMM yyyy')}</span>
+                  </div>
+                </div>
+
+                {selectedHistoryBill.status === 'Due' && (
+                  <Button
+                    size="sm"
+                    className="bg-green-600 hover:bg-green-700 text-white font-bold"
+                    onClick={() => {
+                      handleUpdateStatus(selectedHistoryBill._id, selectedHistoryBill.currentBillDue);
+                      setHistoryModalOpen(false);
+                    }}
+                  >
+                    <CreditCard className="h-4 w-4 mr-1.5" /> Collect Next Payment
+                  </Button>
+                )}
+              </div>
+
+              {/* Financial Metrics Cards */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="p-3.5 rounded-lg border bg-card space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Grand Total</p>
+                  <p className="text-lg font-black text-foreground">৳{Math.round(selectedHistoryBill.gTotal || 0).toLocaleString()}</p>
+                </div>
+                <div className="p-3.5 rounded-lg border border-green-200 bg-green-50/50 dark:bg-green-950/20 space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-green-700 dark:text-green-400">Total Paid (Cash-in)</p>
+                  <p className="text-lg font-black text-green-600">৳{Math.round(selectedHistoryBill.cashIn || 0).toLocaleString()}</p>
+                </div>
+                <div className={`p-3.5 rounded-lg border space-y-1 ${selectedHistoryBill.currentBillDue > 0 ? 'border-orange-200 bg-orange-50/50 dark:bg-orange-950/20' : 'border-muted bg-muted/20'}`}>
+                  <p className={`text-xs font-semibold uppercase tracking-wider ${selectedHistoryBill.currentBillDue > 0 ? 'text-orange-700 dark:text-orange-400' : 'text-muted-foreground'}`}>Remaining Due</p>
+                  <p className={`text-lg font-black ${selectedHistoryBill.currentBillDue > 0 ? 'text-orange-600' : 'text-muted-foreground'}`}>৳{Math.round(selectedHistoryBill.currentBillDue || 0).toLocaleString()}</p>
+                </div>
+              </div>
+
+              {/* Payment Progress Bar */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-xs font-medium">
+                  <span className="text-muted-foreground">Payment Progress</span>
+                  <span className="font-bold text-primary">
+                    {Math.min(100, Math.round(((selectedHistoryBill.cashIn || 0) / (selectedHistoryBill.gTotal || 1)) * 100))}%
+                    {selectedHistoryBill.currentBillDue <= 0 ? ' (Fully Paid)' : ''}
+                  </span>
+                </div>
+                <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
+                  <div
+                    className="bg-green-600 h-2.5 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(100, Math.max(0, Math.round(((selectedHistoryBill.cashIn || 0) / (selectedHistoryBill.gTotal || 1)) * 100)))}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Installments Breakdown List */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-sm flex items-center gap-2">
+                    <Receipt className="h-4 w-4 text-purple-600" />
+                    Payment Installments ({historyData?.installments?.length || 0})
+                  </h4>
+                  <span className="text-xs text-muted-foreground">Step-by-step transaction logs</span>
+                </div>
+
+                {(!historyData?.installments || historyData.installments.length === 0) ? (
+                  <div className="text-center py-8 border rounded-lg bg-muted/20 text-muted-foreground text-sm">
+                    No payment transactions recorded for this bill yet.
+                  </div>
+                ) : (
+                  <div className="border rounded-xl divide-y overflow-hidden bg-card">
+                    {historyData.installments.map((inst: any, idx: number) => (
+                      <div key={idx} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 hover:bg-muted/30 transition-colors">
+                        <div className="flex items-start gap-3">
+                          <div className="h-8 w-8 rounded-full bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
+                            #{inst.installmentNo}
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-sm text-foreground">{inst.description || `Payment Step #${inst.installmentNo}`}</span>
+                              {idx === 0 && (
+                                <Badge variant="outline" className="text-[10px] bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300 border-green-200 py-0 font-bold">
+                                  Latest
+                                </Badge>
+                              )}
+                              <Badge variant="outline" className="text-[11px] bg-muted/50 py-0">
+                                {inst.method || 'Cash'}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                              <Clock className="h-3 w-3" />
+                              <span>{format(new Date(inst.date), 'dd MMM yyyy, hh:mm a')}</span>
+                              <span>•</span>
+                              <span>Remaining Due: <strong className={inst.remainingDueAfter > 0 ? 'text-orange-600' : 'text-green-600'}>৳{Math.round(inst.remainingDueAfter).toLocaleString()}</strong></span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between md:justify-end gap-3 shrink-0">
+                          <div className="text-right">
+                            <div className="text-base font-black text-green-600">
+                              + ৳{Math.round(inst.amount).toLocaleString()}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground">
+                              Total paid so far: ৳{Math.round(inst.cumulativePaid).toLocaleString()}
+                            </div>
+                          </div>
+
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 text-xs font-bold text-emerald-600 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
+                            onClick={() => {
+                              const chronologicalPayments = historyData?.installments
+                                ? [...historyData.installments]
+                                    .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                                    .map((i: any) => ({ _id: i.txId, amount: i.amount, date: i.date }))
+                                : [];
+
+                              generatePaymentReceiptPDF(
+                                {
+                                  ...selectedHistoryBill,
+                                  payments: chronologicalPayments
+                                },
+                                settings,
+                                inst.amount,
+                                inst.date,
+                                inst.txId,
+                                false
+                              );
+                            }}
+                            title="Print receipt for this installment"
+                          >
+                            <Printer className="h-3.5 w-3.5 mr-1" /> Receipt
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter className="flex justify-between items-center sm:justify-between pt-2 border-t">
+                <Button
+                  variant="outline"
+                  onClick={() => setHistoryModalOpen(false)}
+                >
+                  Close
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSelectedBill(selectedHistoryBill);
+                    setHistoryModalOpen(false);
+                  }}
+                >
+                  <Eye className="h-4 w-4 mr-1.5" /> View Full Bill
+                </Button>
+              </DialogFooter>
+            </div>
           )}
         </DialogContent>
       </Dialog>

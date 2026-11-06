@@ -18,6 +18,7 @@ import ShareDialog from '@/components/storefront/ShareDialog';
 import { fbEvent } from '@/lib/fpixel';
 import { ttEvent } from '@/lib/tiktok';
 import { validateAndAddToCart } from '@/lib/cart-seller';
+import ProductVideoThumbnailModal from '@/components/storefront/ProductVideoThumbnailModal';
 
 interface ProductDetailsV2ClientProps {
   product: any;
@@ -392,8 +393,14 @@ export default function ProductDetailsV2Client({ product }: ProductDetailsV2Clie
         </div>
 
         {/* Thumbnails list */}
-        {allImages && allImages.length > 1 && (
+        {allImages && (allImages.length > 1 || product.videoUrl) && (
           <div className="flex gap-2.5 overflow-auto pt-3 pb-1 scrollbar-none w-full max-w-[480px] xl:max-w-[500px] justify-center">
+            <ProductVideoThumbnailModal
+              videoUrl={product.videoUrl}
+              thumbnailImage={allImages?.[0]}
+              className="h-16 w-12 flex-shrink-0"
+              title={product?.name}
+            />
             {allImages.map((img: string, i: number) => (
               <button
                 key={i}
@@ -426,7 +433,7 @@ export default function ProductDetailsV2Client({ product }: ProductDetailsV2Clie
 
           {/* Price */}
           <div className="flex items-center gap-2 pt-2">
-            {displaySalePrice && displaySalePrice !== displayPrice ? (
+            {displaySalePrice && displayPrice > displaySalePrice ? (
               <>
                 <span className="text-base sm:text-lg font-medium text-foreground">Tk {Math.round(displaySalePrice).toLocaleString()}</span>
                 <span className="text-sm text-muted-foreground line-through font-normal">Tk {Math.round(displayPrice ?? 0).toLocaleString()}</span>

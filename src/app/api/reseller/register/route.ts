@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Store name, subdomain, and phone number are required.' }, { status: 400 });
     }
 
-    const cleanSubdomain = subdomain.toLowerCase().trim();
+    const cleanSubdomain = subdomain.toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9-]/g, '').trim();
     // Validate subdomain format (3-63 lowercase alphanumeric characters or hyphens)
     if (!/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(cleanSubdomain)) {
       return NextResponse.json({
@@ -152,6 +152,84 @@ export async function POST(request: NextRequest) {
       await seedDefaultTransactionCategories(newReseller._id);
     } catch (seedErr) {
       console.error('Failed to pre-seed reseller accounts/categories:', seedErr);
+    }
+
+    // Trigger Admin & User Notifications
+    try {
+      const { createAdminNotification, createNotification } = await import('@/lib/notifications');
+      await createAdminNotification({
+        title: '👤 New Reseller Application',
+        message: `${newReseller.storeName} (${newReseller.subdomain}) applied for reseller approval.`,
+        type: 'reseller',
+        link: '/admin/resellers',
+        sendPush: true,
+      });
+      await createNotification({
+        userId: targetUserId,
+        resellerId: newReseller._id,
+        title: '👤 Application Submitted',
+        message: 'Your reseller application has been submitted successfully and is awaiting review.',
+        type: 'reseller',
+        link: '/login',
+        sendPush: false,
+      });
+
+      // Instant Telegram Alert for New Reseller Application
+      try {
+        const { sendTelegramResellerNotification } = await import('@/lib/telegram');
+        sendTelegramResellerNotification({
+          storeName: newReseller.storeName,
+          subdomain: newReseller.subdomain,
+          name: resolvedContactPerson || name || session?.user?.name || storeName,
+          phone,
+          email: targetEmail,
+          hubName: resolvedHubName,
+          district: resolvedDistrict,
+          division: resolvedDivision,
+          address: resolvedAddress,
+        }).catch(err => console.error('[Reseller Telegram Alert Error]', err));
+      } catch (tgErr) {
+        console.error('[Reseller Telegram Alert Import Error]', tgErr);
+      }
+    } catch (notifErr) {
+      console.error('[Reseller Registration Notification Error]', notifErr);
+    }
+
+    // Send Welcome / Confirmation Email to Reseller in background (Non-blocking, ABSInternational pattern)
+    if (targetEmail) {
+      try {
+        const joiningDate = new Date().toLocaleString('en-US', {
+          timeZone: 'Asia/Dhaka',
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        }) + ' (BST)';
+
+        import('@/lib/mail')
+          .then(({ sendResellerWelcomeEmail }) => {
+            sendResellerWelcomeEmail({
+              email: targetEmail,
+              name: resolvedContactPerson || name || session?.user?.name || storeName,
+              storeName: newReseller.storeName,
+              subdomain: newReseller.subdomain,
+              password: password || undefined,
+              phone,
+              hubName: resolvedHubName,
+              contactPerson: resolvedContactPerson,
+              division: resolvedDivision,
+              district: resolvedDistrict,
+              thana: resolvedThana,
+              address: resolvedAddress,
+              joiningDate,
+            }).catch(err => console.error('[Background Reseller Welcome Email Error]', err));
+          })
+          .catch(mailImportErr => console.error('[Reseller Mail Import Error]', mailImportErr));
+      } catch (mailTriggerErr) {
+        console.error('[Reseller Registration Mail Trigger Error]', mailTriggerErr);
+      }
     }
 
     return NextResponse.json({

@@ -58,6 +58,10 @@ export interface IProduct extends Document {
   uploadedBy?: mongoose.Types.ObjectId | null;
   isShared?: boolean;
   isMotherProduct?: boolean;
+  isApprovedByAdmin?: boolean;
+  metaTitle?: string;
+  metaDescription?: string;
+  videoUrl?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -147,19 +151,25 @@ const ProductSchema: Schema<IProduct> = new Schema(
     uploadedBy: { type: Schema.Types.ObjectId, ref: 'Reseller', default: null },
     isShared: { type: Boolean, default: false },
     isMotherProduct: { type: Boolean, default: false },
+    isApprovedByAdmin: { type: Boolean, default: false },
+    metaTitle: { type: String, maxlength: 70 },
+    metaDescription: { type: String, maxlength: 160 },
+    videoUrl: { type: String },
   },
   { timestamps: true }
 );
 
 ProductSchema.index({ isMotherProduct: 1 });
 ProductSchema.index({ uploadedBy: 1 });
+ProductSchema.index({ isApprovedByAdmin: 1 });
 ProductSchema.index({ name: 1 }); // Optimized for search
 ProductSchema.index({ categories: 1 }); // Optimized for category filtering
 
 ProductSchema.pre('validate', function(this: any) {
   // If no uploadedBy reseller is specified, this product is owned by Mother Shop Admin
-  if (!this.uploadedBy && this.isMotherProduct === undefined) {
-    this.isMotherProduct = true;
+  if (!this.uploadedBy) {
+    if (this.isMotherProduct === undefined) this.isMotherProduct = true;
+    if (this.isApprovedByAdmin === undefined) this.isApprovedByAdmin = true;
   }
 
   // Main product validation

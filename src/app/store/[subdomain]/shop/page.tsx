@@ -12,6 +12,7 @@ import { FooterSelector } from '@/components/templates/ServerRegistry';
 import { SettingsProvider } from '@/components/SettingsProvider';
 import { ResellerPixels } from '@/components/reseller/ResellerPixels';
 import type { Metadata } from 'next';
+import { resolveRequestHost } from '@/lib/seo';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,10 +31,12 @@ export async function generateMetadata({ params }: { params: Promise<{ subdomain
   const reseller = await getReseller(subdomain);
   if (!reseller) return { title: 'Store Not Found' };
 
+  const headersList = await headers();
   const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com';
-  const rawDomain = (reseller as any).customDomain || `${subdomain}.${rootDomain}`;
-  const storeDomain = rawDomain.replace(/^https?:\/\//, '').replace(/\/+$/, '');
-  const canonicalUrl = `https://${storeDomain}/shop`;
+  const defaultSubdomainHost = `${(reseller as any).subdomain || subdomain}.${rootDomain}`;
+  const incomingHost = resolveRequestHost(headersList, defaultSubdomainHost);
+  const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+  const canonicalUrl = `${protocol}://${incomingHost}/shop`;
 
   return {
     title: 'Shop All Products',
@@ -78,18 +81,38 @@ export default async function ResellerShopPage({ params, searchParams }: Props) 
   ]);
 
   // Format reseller products so they match the standard storefront Product shape
-  const allFormatted = (resellerProducts || []).map((rp: any) => {
+  const allFormatted = (resellerProducts || [])
+    .filter((rp: any) => {
+      const parent = rp.productId;
+      if (!parent) return false;
+      if (parent.isPublished === false) return false;
+      if (parent.uploadedBy && parent.isApprovedByAdmin !== true) return false;
+      return true;
+    })
+    .map((rp: any) => {
     const parent = rp.productId || {};
-    const finalPrice = typeof rp.retailPrice === 'number' && !isNaN(rp.retailPrice) 
-      ? rp.retailPrice 
+    const finalPrice = typeof rp.retailPrice === 'number' && !isNaN(rp.retailPrice)
+      ? rp.retailPrice
       : (typeof parent.price === 'number' ? parent.price : 0);
-    const regularPrice = typeof parent.price === 'number' && parent.price > 0
-      ? parent.price
-      : (typeof rp.motherPrice === 'number' && rp.motherPrice > 0 ? rp.motherPrice : finalPrice);
 
     // isOwnProduct: uploaded directly by this reseller
-    const isOwnProduct = parent.uploadedBy &&
-      parent.uploadedBy.toString() === reseller._id.toString();
+    const isOwnProduct = Boolean(parent.uploadedBy &&
+      parent.uploadedBy.toString() === reseller._id.toString());
+
+    let regularPrice = finalPrice;
+    let salePrice: number | undefined = undefined;
+
+    if (isOwnProduct) {
+      if (typeof parent.price === 'number' && typeof parent.salePrice === 'number' && parent.price > parent.salePrice) {
+        regularPrice = parent.price;
+        salePrice = parent.salePrice;
+      }
+    } else if (!parent.uploadedBy) {
+      if (typeof parent.price === 'number' && parent.price > finalPrice && typeof parent.salePrice === 'number') {
+        regularPrice = parent.price;
+        salePrice = finalPrice;
+      }
+    }
 
     // Merge parent variants with reseller's custom variant pricing
     const parentVariants = Array.isArray(parent.variants) ? parent.variants : [];
@@ -101,10 +124,25 @@ export default async function ResellerShopPage({ params, searchParams }: Props) 
         String(rv.size || '').trim().toLowerCase() === String(v.size || '').trim().toLowerCase()
       );
       const varRetailPrice = match?.retailPrice || (idx === 0 ? finalPrice : (v.price || finalPrice));
+      let varRegularPrice = varRetailPrice;
+      let varSalePrice: number | undefined = undefined;
+
+      if (isOwnProduct) {
+        if (typeof v.price === 'number' && typeof v.salePrice === 'number' && v.price > v.salePrice) {
+          varRegularPrice = v.price;
+          varSalePrice = v.salePrice;
+        }
+      } else if (!parent.uploadedBy) {
+        if (typeof v.price === 'number' && v.price > varRetailPrice && typeof v.salePrice === 'number') {
+          varRegularPrice = v.price;
+          varSalePrice = varRetailPrice;
+        }
+      }
+
       return {
         ...v,
-        price: regularPrice || varRetailPrice,
-        salePrice: varRetailPrice,
+        price: varRegularPrice,
+        salePrice: varSalePrice,
         retailPrice: varRetailPrice,
       };
     });
@@ -115,7 +153,7 @@ export default async function ResellerShopPage({ params, searchParams }: Props) 
       name: rp.name || parent.name || 'Product',
       slug: rp.slug || parent.slug,
       price: regularPrice,
-      salePrice: finalPrice !== regularPrice ? finalPrice : undefined,
+      salePrice: salePrice,
       retailPrice: rp.retailPrice,
       uploadedBy: parent.uploadedBy,
       isOwnProduct,

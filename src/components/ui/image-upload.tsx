@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Upload, X, Loader2, Image as ImageIcon } from 'lucide-react';
-import { uploadToImgBB } from '@/lib/upload';
+import { uploadImageToR2 } from '@/lib/upload';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
@@ -18,9 +18,23 @@ interface ImageUploadProps {
   iconClassName?: string;
   compact?: boolean;
   aspect?: "square" | "video" | "banner";
+  folder?: string;
+  maxWidthOrHeight?: number;
+  targetMaxKB?: number;
 }
 
-export function ImageUpload({ onUpload, value, label, className, iconClassName, compact, aspect = "banner" }: ImageUploadProps) {
+export function ImageUpload({ 
+  onUpload, 
+  value, 
+  label, 
+  className, 
+  iconClassName, 
+  compact, 
+  aspect = "banner",
+  folder,
+  maxWidthOrHeight,
+  targetMaxKB
+}: ImageUploadProps) {
   const [loading, setLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const generatedId = useId();
@@ -45,7 +59,16 @@ export function ImageUpload({ onUpload, value, label, className, iconClassName, 
 
     setLoading(true);
     try {
-      const url = await uploadToImgBB(file);
+      const isBanner = folder === 'banners' || (!compact && aspect === 'banner' && folder !== 'products');
+      const uploadFolder = folder || (isBanner ? 'banners' : 'products');
+      const maxDim = maxWidthOrHeight ?? (isBanner ? 2100 : 1200);
+      const maxKB = targetMaxKB ?? (isBanner ? 400 : 150);
+
+      const url = await uploadImageToR2(file, {
+        folder: uploadFolder,
+        maxWidthOrHeight: maxDim,
+        targetMaxKB: maxKB,
+      });
       onUpload(url);
       toast.success('Image uploaded successfully');
     } catch (error: any) {

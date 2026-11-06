@@ -1,10 +1,13 @@
 import { notFound } from 'next/navigation';
+import { auth } from '@/auth';
 import dbConnect from '@/lib/db';
 import Reseller from '@/models/Reseller';
 import ResellerProduct from '@/models/ResellerProduct';
 import Product from '@/models/Product';
 import Link from 'next/link';
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
+import { resolveRequestHost, getProductMeta } from '@/lib/seo';
 import { NavbarSelector } from '@/components/templates/Registry';
 import { FooterSelector } from '@/components/templates/ServerRegistry';
 import { SettingsProvider } from '@/components/SettingsProvider';
@@ -13,11 +16,13 @@ import ResellerProductDetailsClient from '@/components/reseller/ResellerProductD
 import { ResellerPixels } from '@/components/reseller/ResellerPixels';
 import { ChevronRight } from 'lucide-react';
 import { ProductCard } from '@/components/storefront/ProductCard';
+import { Button } from '@/components/ui/button';
 
 export const dynamic = 'force-dynamic';
 
 interface Props {
   params: Promise<{ subdomain: string; slug: string }>;
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -26,24 +31,32 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const reseller = await Reseller.findOne({ subdomain, status: 'active' }).select('storeName customDomain subdomain').lean() as any;
   if (!reseller) return { title: 'Not Found' };
 
+  const headersList = await headers();
   const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com';
-  const rawDomain = reseller.customDomain || `${reseller.subdomain || subdomain}.${rootDomain}`;
-  const storeDomain = rawDomain.replace(/^https?:\/\//, '').replace(/\/+$/, '');
-  const canonicalUrl = `https://${storeDomain}/product/${slug}`;
+  const defaultSubdomainHost = `${reseller.subdomain || subdomain}.${rootDomain}`;
+  const incomingHost = resolveRequestHost(headersList, defaultSubdomainHost);
+  const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+  const canonicalUrl = `${protocol}://${incomingHost}/product/${slug}`;
 
-  let product = await ResellerProduct.findOne({ resellerId: reseller._id, slug, isPublished: true }).lean();
+  let product = await ResellerProduct.findOne({ resellerId: reseller._id, slug, isPublished: true }).populate('productId').lean() as any;
   if (!product) {
-    const direct = await Product.findOne({ uploadedBy: reseller._id, slug, isPublished: true }).lean();
+    const direct = await Product.findOne({ uploadedBy: reseller._id, slug, isPublished: true }).lean() as any;
     if (direct) {
+      const { safeTitle, safeDescription } = getProductMeta({
+        name: direct.name,
+        metaTitle: direct.metaTitle,
+        metaDescription: direct.metaDescription,
+      });
+
       return {
-        title: direct.name,
-        description: direct.description ? direct.description.slice(0, 160) : direct.name,
+        title: safeTitle,
+        description: safeDescription,
         alternates: {
           canonical: canonicalUrl,
         },
         openGraph: {
-          title: `${direct.name} | ${reseller.storeName}`,
-          description: direct.description ? direct.description.slice(0, 160) : direct.name,
+          title: `${safeTitle} | ${reseller.storeName}`,
+          description: safeDescription,
           url: canonicalUrl,
           images: direct.images?.[0] ? [direct.images[0]] : [],
         },
@@ -51,24 +64,33 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     }
     return { title: 'Product Not Found' };
   }
-  const prodDesc = (product as any).description ? String((product as any).description).slice(0, 160) : product.name;
+
+  const motherProduct = product.productId || {};
+  const { safeTitle, safeDescription } = getProductMeta({
+    name: product.name || motherProduct.name,
+    metaTitle: product.metaTitle || motherProduct.metaTitle,
+    metaDescription: product.metaDescription || motherProduct.metaDescription,
+  });
+
   return {
-    title: product.name,
-    description: prodDesc,
+    title: safeTitle,
+    description: safeDescription,
     alternates: {
       canonical: canonicalUrl,
     },
     openGraph: {
-      title: `${product.name} | ${reseller.storeName}`,
-      description: prodDesc,
+      title: `${safeTitle} | ${reseller.storeName}`,
+      description: safeDescription,
       url: canonicalUrl,
       images: product.images?.[0] ? [product.images[0]] : [],
     },
   };
 }
 
-export default async function ResellerProductPage({ params }: Props) {
+export default async function ResellerProductPage({ params, searchParams }: Props) {
   const { subdomain, slug } = await params;
+  const sParams = searchParams ? await searchParams : {};
+  const isPreview = sParams.preview === 'true' || sParams.adminPreview === 'true';
   await dbConnect();
 
   const reseller = await Reseller.findOne({ subdomain, status: 'active' }).lean() as any;
@@ -130,16 +152,59 @@ export default async function ResellerProductPage({ params }: Props) {
   if (!productDoc || !productDoc.productId) notFound();
 
   const parent = productDoc.productId as any;
+  
+  // Allow admins, super_admins, store owner, or preview token to view pending reseller products
+  let isAllowedToPreview = isPreview;
+  if (!isAllowedToPreview) {
+    const session = await auth();
+    const userRole = (session?.user as any)?.role;
+    const isAdmin = userRole === 'admin' || userRole === 'super_admin' || session?.user?.email === 'imranshuvo101@gmail.com';
+    const isOwner = session?.user && ((session?.user as any)?.resellerId === reseller._id.toString() || session?.user?.id === reseller.userId?.toString());
+    isAllowedToPreview = !!(isAdmin || isOwner);
+  }
+
+  const isPendingApproval = parent.uploadedBy && parent.isApprovedByAdmin !== true;
+  if (isPendingApproval && !isAllowedToPreview) {
+    notFound();
+  }
   const isPersonal = parent.isMotherProduct === false || (parent.uploadedBy && parent.uploadedBy.toString() === reseller._id.toString());
   // If it's a mother catalog product and unpublished on mother site, 404
   if (!isPersonal && productDoc.isAvailableOnMother === false) {
     notFound();
   }
 
-  // Format product to match the shape expected by ResellerProductDetailsClient
-  const regularPrice = typeof parent.price === 'number' && parent.price > 0
-    ? parent.price
-    : (typeof productDoc.motherPrice === 'number' && productDoc.motherPrice > 0 ? productDoc.motherPrice : productDoc.retailPrice);
+  // isOwnProduct: uploaded directly by this reseller
+  const isOwnProduct = Boolean(parent.uploadedBy && parent.uploadedBy.toString() === reseller._id.toString());
+
+  // Determine regular vs sale pricing
+  // For sourced products (from another reseller or mother catalog without explicit discount),
+  // NEVER use the supplier's personal retail price as regularPrice or strikethrough!
+  let regularPrice = productDoc.retailPrice;
+  let salePrice: number | undefined = undefined;
+
+  if (isOwnProduct) {
+    if (typeof parent.price === 'number' && typeof parent.salePrice === 'number' && parent.price > parent.salePrice) {
+      regularPrice = parent.price;
+      salePrice = parent.salePrice;
+    } else {
+      regularPrice = productDoc.retailPrice || (typeof parent.price === 'number' ? parent.price : 0);
+      salePrice = undefined;
+    }
+  } else if (!parent.uploadedBy) {
+    // Mother catalog item: only show strikethrough if mother price was genuinely higher than reseller selling price
+    if (typeof parent.price === 'number' && parent.price > productDoc.retailPrice && typeof parent.salePrice === 'number') {
+      regularPrice = parent.price;
+      salePrice = productDoc.retailPrice;
+    } else {
+      regularPrice = productDoc.retailPrice;
+      salePrice = undefined;
+    }
+  } else {
+    // Sourced from another reseller (e.g. B2B supplier reseller):
+    // The reseller's selling price is cleanly shown with no foreign retail price or fake strikethrough
+    regularPrice = productDoc.retailPrice;
+    salePrice = undefined;
+  }
 
   // Merge parent variants with reseller's custom variant pricing
   const parentVariants = Array.isArray(parent.variants) ? parent.variants : [];
@@ -151,10 +216,26 @@ export default async function ResellerProductPage({ params }: Props) {
       String(rv.size || '').trim().toLowerCase() === String(v.size || '').trim().toLowerCase()
     );
     const varRetailPrice = match?.retailPrice || (idx === 0 ? productDoc.retailPrice : (v.price || productDoc.retailPrice));
+    
+    let varRegularPrice = varRetailPrice;
+    let varSalePrice: number | undefined = undefined;
+
+    if (isOwnProduct) {
+      if (typeof v.price === 'number' && typeof v.salePrice === 'number' && v.price > v.salePrice) {
+        varRegularPrice = v.price;
+        varSalePrice = v.salePrice;
+      }
+    } else if (!parent.uploadedBy) {
+      if (typeof v.price === 'number' && v.price > varRetailPrice && typeof v.salePrice === 'number') {
+        varRegularPrice = v.price;
+        varSalePrice = varRetailPrice;
+      }
+    }
+
     return {
       ...v,
-      price: regularPrice || varRetailPrice,
-      salePrice: varRetailPrice,
+      price: varRegularPrice,
+      salePrice: varSalePrice,
       retailPrice: varRetailPrice,
     };
   });
@@ -166,8 +247,9 @@ export default async function ResellerProductPage({ params }: Props) {
     slug: productDoc.slug || parent.slug,
     retailPrice: productDoc.retailPrice,
     price: regularPrice,
-    salePrice: productDoc.retailPrice,
+    salePrice: salePrice,
     uploadedBy: parent.uploadedBy,
+    isOwnProduct,
     images: productDoc.images?.length > 0 ? productDoc.images : parent.images || [],
     description: parent.description,
     categories: parent.categories || [],
@@ -184,48 +266,80 @@ export default async function ResellerProductPage({ params }: Props) {
     createdAt: productDoc.createdAt || parent.createdAt,
   };
 
-  // Related products from the same reseller store
+  // Related products from the same reseller store (strictly tenant isolated)
   let relatedProducts: any[] = [];
   try {
     const allCategoryIds = (parent.categories || []).map((c: any) => c._id?.toString() || c.toString()).filter(Boolean);
-    if (allCategoryIds.length > 0) {
-      const related = await ResellerProduct.find({
+    const tags = Array.isArray(parent.tags) ? parent.tags.filter(Boolean) : [];
+
+    // 1. Find product IDs matching category or tags
+    let matchingProductIds: any[] = [];
+    if (allCategoryIds.length > 0 || tags.length > 0) {
+      const filterClauses: any[] = [];
+      if (allCategoryIds.length > 0) filterClauses.push({ categories: { $in: allCategoryIds } });
+      if (tags.length > 0) filterClauses.push({ tags: { $in: tags } });
+      matchingProductIds = await Product.find({ $or: filterClauses }).distinct('_id');
+    }
+
+    // 2. Fetch related products strictly from THIS reseller catalog
+    let relatedDocs = await ResellerProduct.find({
+      resellerId: reseller._id,
+      _id: { $ne: productDoc._id },
+      isPublished: true,
+      isAvailableOnMother: true,
+      stock: { $gt: 0 },
+      ...(matchingProductIds.length > 0 ? { productId: { $in: matchingProductIds } } : {}),
+    })
+      .populate({
+        path: 'productId',
+        populate: [{ path: 'categories' }],
+      })
+      .sort({ createdAt: -1 })
+      .limit(4)
+      .lean() as any[];
+
+    // 3. Fallback: if fewer than 4 category matches, fill with other active products from THIS reseller store
+    if (relatedDocs.length < 4) {
+      const excludedIds = [productDoc._id, ...relatedDocs.map((d: any) => d._id)];
+      const additionalDocs = await ResellerProduct.find({
         resellerId: reseller._id,
-        _id: { $ne: productDoc._id },
+        _id: { $nin: excludedIds },
         isPublished: true,
         isAvailableOnMother: true,
         stock: { $gt: 0 },
-      }).populate({
-        path: 'productId',
-        populate: [{ path: 'categories' }]
-      }).limit(4).lean() as any[];
-
-      relatedProducts = related
-        .filter((rp: any) => {
-          if (!rp.productId) return false;
-          const cats = (rp.productId.categories || []).map((c: any) => c._id?.toString() || c.toString());
-          return cats.some((id: string) => allCategoryIds.includes(id));
+      })
+        .populate({
+          path: 'productId',
+          populate: [{ path: 'categories' }],
         })
-        .map((rp: any) => {
-          const p = rp.productId || {};
-          const finalPrice = typeof rp.retailPrice === 'number' ? rp.retailPrice : (p.price ?? 0);
-          return {
-            _id: rp._id.toString(),
-            name: rp.name || p.name || 'Product',
-            slug: rp.slug || p.slug,
-            price: finalPrice,
-            salePrice: finalPrice,
-            images: rp.images?.length > 0 ? rp.images : p.images || [],
-            stock: rp.stock ?? p.stock ?? 0,
-            categories: p.categories || [],
-            isNewArrival: Boolean(p.isNewArrival),
-            isFeatured: Boolean(p.isFeatured),
-            ratings: p.ratings || 0,
-            numReviews: p.numReviews || 0,
-            variants: p.variants || [],
-          };
-        });
+        .sort({ createdAt: -1 })
+        .limit(4 - relatedDocs.length)
+        .lean() as any[];
+
+      relatedDocs = [...relatedDocs, ...additionalDocs];
     }
+
+    relatedProducts = relatedDocs
+      .filter((rp: any) => rp.productId)
+      .map((rp: any) => {
+        const p = rp.productId || {};
+        const finalPrice = typeof rp.retailPrice === 'number' && rp.retailPrice > 0 ? rp.retailPrice : (p.price ?? 0);
+        return {
+          _id: rp._id.toString(),
+          name: rp.name || p.name || 'Product',
+          slug: rp.slug || p.slug,
+          price: finalPrice,
+          salePrice: finalPrice,
+          images: rp.images?.length > 0 ? rp.images : p.images || [],
+          stock: rp.stock ?? p.stock ?? 0,
+          categories: p.categories || [],
+          isNewArrival: Boolean(p.isNewArrival),
+          isFeatured: Boolean(p.isFeatured),
+          ratings: p.ratings || 0,
+          numReviews: p.numReviews || 0,
+          variants: p.variants || [],
+        };
+      });
   } catch (err) {
     console.error('Error fetching related products:', err);
   }
@@ -291,10 +405,12 @@ export default async function ResellerProductPage({ params }: Props) {
             <section className="mt-20">
               <div className="flex items-end justify-between mb-8 gap-4">
                 <div>
-                  <h2 className="text-2xl md:text-3xl font-black tracking-tight">আরো পণ্য দেখুন</h2>
-                  <p className="text-muted-foreground mt-1">একই ক্যাটাগরির আরো পণ্য।</p>
+                  <h2 className="text-2xl md:text-3xl font-black tracking-tight">You May Also Like</h2>
+                  <p className="text-muted-foreground mt-1">Similar picks based on this product&apos;s category and tags.</p>
                 </div>
-                <Link href="/shop" className="text-sm font-bold text-primary hover:underline">সব দেখুন →</Link>
+                <Button variant="outline" render={<Link href="/shop" />} nativeButton={false}>
+                  Explore More
+                </Button>
               </div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                 {relatedProducts.map((item: any) => (

@@ -6,7 +6,7 @@ import mongoose, { Document, Model, Schema } from 'mongoose';
  */
 export interface IResellerWalletTransaction extends Document {
   resellerId: mongoose.Types.ObjectId;
-  type: 'commission_earned' | 'payout_released' | 'order_cancelled' | 'adjustment' | 'refund';
+  type: 'commission_earned' | 'payout_released' | 'order_cancelled' | 'adjustment' | 'refund' | 'courier_return_loss';
   amount: number;                            // positive = credit, negative = debit
   orderId?: mongoose.Types.ObjectId;         // Related reseller order
   description: string;
@@ -21,6 +21,7 @@ export interface IResellerWalletTransaction extends Document {
   adminNote?: string;                        // Optional admin note
   destinationAccountId?: mongoose.Types.ObjectId; // Reseller's selected LedgerAccount
   processedBy?: mongoose.Types.ObjectId;     // Admin user who processed payout
+  balanceAfter?: number;                     // Running wallet balance after this transaction
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,7 +31,7 @@ const ResellerWalletTransactionSchema: Schema<IResellerWalletTransaction> = new 
     resellerId: { type: Schema.Types.ObjectId, ref: 'Reseller', required: true },
     type: {
       type: String,
-      enum: ['commission_earned', 'payout_released', 'order_cancelled', 'adjustment', 'refund'],
+      enum: ['commission_earned', 'payout_released', 'order_cancelled', 'adjustment', 'refund', 'courier_return_loss'],
       required: true,
     },
     amount: { type: Number, required: true },
@@ -51,6 +52,7 @@ const ResellerWalletTransactionSchema: Schema<IResellerWalletTransaction> = new 
     adminNote: { type: String },
     destinationAccountId: { type: Schema.Types.ObjectId, ref: 'LedgerAccount' },
     processedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    balanceAfter: { type: Number },
   },
   { timestamps: true }
 );

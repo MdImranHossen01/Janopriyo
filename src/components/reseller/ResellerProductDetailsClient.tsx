@@ -20,6 +20,8 @@ import Image from 'next/image';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import ShareDialog from '@/components/storefront/ShareDialog';
 import Swal from 'sweetalert2';
+import ProductVideoThumbnailModal from '@/components/storefront/ProductVideoThumbnailModal';
+import ReviewsSection from '@/components/storefront/ReviewsSection';
 
 const CURRENCY_SYMBOL = '৳';
 
@@ -135,11 +137,11 @@ export default function ResellerProductDetailsClient({
 
   // For non-variant products: price = regular (mother) price, salePrice = reseller's selling price
   const displayPrice = hasVariants
-    ? (currentVariant?.price ?? currentVariant?.retailPrice ?? product.retailPrice ?? product.price ?? 0)
+    ? (currentVariant?.price ?? currentVariant?.retailPrice ?? product.price ?? product.retailPrice ?? 0)
     : (product.price ?? product.retailPrice ?? 0);
   const displaySalePrice = hasVariants
-    ? (currentVariant?.retailPrice ?? currentVariant?.salePrice ?? undefined)
-    : (product.salePrice != null && product.salePrice !== product.price ? product.salePrice : undefined);
+    ? (currentVariant?.salePrice != null && currentVariant?.price != null && currentVariant.price > currentVariant.salePrice ? currentVariant.salePrice : undefined)
+    : (product.salePrice != null && product.price != null && product.price > product.salePrice ? product.salePrice : undefined);
   const displayStock = hasVariants ? (currentVariant?.stock ?? 0) : (product.stock ?? 0);
 
   const discount = (displayPrice > 0 && displaySalePrice && displaySalePrice < displayPrice)
@@ -344,6 +346,12 @@ export default function ResellerProductDetailsClient({
 
         {/* Thumbnails */}
         <div className="flex gap-4 overflow-auto pb-2 scrollbar-none">
+          <ProductVideoThumbnailModal
+            videoUrl={product.videoUrl || product.productId?.videoUrl}
+            thumbnailImage={allImages?.[0]}
+            className="h-20 w-20 flex-shrink-0 rounded-md"
+            title={product.name}
+          />
           {allImages?.map((img: string, i: number) => (
             <button
               key={i}
@@ -386,9 +394,9 @@ export default function ResellerProductDetailsClient({
         <div className="flex flex-col gap-1">
           <div className="flex items-baseline gap-4">
             <span className="text-3xl font-extrabold text-primary">
-              {CURRENCY_SYMBOL}{Math.round(displaySalePrice || displayPrice)}
+              {CURRENCY_SYMBOL}{Math.round(displaySalePrice ?? displayPrice)}
             </span>
-            {displaySalePrice && displaySalePrice !== displayPrice && (
+            {displaySalePrice && displayPrice > displaySalePrice && (
               <span className="text-xl text-muted-foreground line-through font-medium">
                 {CURRENCY_SYMBOL}{Math.round(displayPrice)}
               </span>
@@ -572,10 +580,10 @@ export default function ResellerProductDetailsClient({
               Description
             </TabsTrigger>
             <TabsTrigger
-              value="delivery"
+              value="reviews"
               className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 md:px-6 py-3 md:py-4 font-bold uppercase tracking-wider text-xs md:text-sm text-muted-foreground data-[state=active]:text-foreground"
             >
-              Delivery
+              Reviews ({product.numReviews || 0})
             </TabsTrigger>
           </TabsList>
 
@@ -590,21 +598,10 @@ export default function ResellerProductDetailsClient({
             )}
           </TabsContent>
 
-          <TabsContent value="delivery" className="animate-in fade-in-50 duration-500">
-            <div className="max-w-md space-y-4 text-sm">
-              <div className="rounded-xl border p-4 space-y-3">
-                <h3 className="font-bold text-base">📦 Delivery Information</h3>
-                <div className="flex justify-between items-center py-2 border-b">
-                  <span className="text-muted-foreground">Inside Dhaka</span>
-                  <span className="font-bold text-primary">{CURRENCY_SYMBOL}{deliveryInside}</span>
-                </div>
-                <div className="flex justify-between items-center py-2">
-                  <span className="text-muted-foreground">Outside Dhaka</span>
-                  <span className="font-bold text-primary">{CURRENCY_SYMBOL}{deliveryOutside}</span>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">Delivery usually takes 2-5 working days.</p>
-            </div>
+          <TabsContent value="reviews" className="animate-in fade-in-50 duration-500">
+            <Suspense fallback={<div className="flex justify-center p-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>}>
+              <ReviewsSection productId={product.productId || product._id} />
+            </Suspense>
           </TabsContent>
         </Tabs>
       </div>

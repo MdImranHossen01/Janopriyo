@@ -8,10 +8,12 @@ import Expense from '@/models/Expense';
 import Reseller from '@/models/Reseller';
 import LedgerAccount from '@/models/LedgerAccount';
 import Bill from '@/models/Bill';
+import SupplierBill from '@/models/SupplierBill';
 import Subscriber from '@/models/Subscriber';
 import ResellerWalletTransaction from '@/models/ResellerWalletTransaction';
 import BusinessLoan from '@/models/BusinessLoan';
 import { syncPayablesToLedger } from '@/lib/ledgerHelper';
+import { getTopSellers } from '@/lib/topSellersHelper';
 
 export async function GET(req: NextRequest) {
   try {
@@ -94,7 +96,12 @@ export async function GET(req: NextRequest) {
       chartData,
       sevenDaysOrders,
       sevenDaysExpenses,
-      activeLoansStats
+      activeLoansStats,
+      dueSupplierBillsStats,
+      totalAllProductsCount,
+      motherProductsCount,
+      resellerProductsCount,
+      pendingApprovalProductsCount
     ] = await Promise.all([
       // 1. Revenue, COGS, Delivery charge stats (Current Period)
       Order.aggregate([
@@ -193,9 +200,17 @@ export async function GET(req: NextRequest) {
         }
       ]),
 
-      // 3. Order counts grouped by workflow status
+      // 3. Order counts grouped by workflow status (all orders fulfilled via mother courier logistics)
       Order.aggregate([
-        { $match: { ...motherOrderFilter } },
+        {
+          $match: {
+            $or: [
+              { deletedAt: null },
+              { paymentStatus: 'Paid' },
+              { status: 'Delivered' }
+            ]
+          }
+        },
         {
           $group: {
             _id: '$status',
@@ -377,7 +392,33 @@ export async function GET(req: NextRequest) {
             totalActiveLoansDue: { $sum: '$dueAmount' }
           }
         }
-      ]).catch(() => [])
+      ]).catch(() => []),
+
+      // 15b. Due Supplier Bills (Payables for purchases from suppliers)
+      SupplierBill.aggregate([
+        { $match: { status: 'Due' } },
+        {
+          $group: {
+            _id: null,
+            totalDueSupplierBills: { $sum: '$dueAmount' },
+            count: { $sum: 1 }
+          }
+        }
+      ]).catch(() => []),
+
+      // 16. Total Products Breakdown
+      Product.countDocuments({}),
+      Product.countDocuments({
+        $or: [{ uploadedBy: null }, { uploadedBy: { $exists: false } }]
+      }),
+      Product.countDocuments({
+        uploadedBy: { $ne: null, $exists: true }
+      }),
+      Product.countDocuments({
+        uploadedBy: { $ne: null, $exists: true },
+        isPublished: true,
+        $or: [{ isApprovedByAdmin: false }, { isApprovedByAdmin: { $exists: false } }]
+      })
     ]);
 
     // Process Current Revenue Stats
@@ -484,8 +525,10 @@ export async function GET(req: NextRequest) {
     const arAccount = (ledgerAccounts as any[]).find((acc: any) => acc.code === 'AR');
     const totalReceivable = arAccount ? (arAccount.currentBalance || 0) : (billDueTotal + pendingOrderReceivable);
 
-    // Process Liabilities (Loans)
+    // Process Liabilities (Loans & Supplier Bills)
     const totalActiveLoansDue = (activeLoansStats as any[])?.[0]?.totalActiveLoansDue || 0;
+    const supplierBillsDueTotal = (dueSupplierBillsStats as any[])?.[0]?.totalDueSupplierBills || 0;
+    const supplierBillsDueCount = (dueSupplierBillsStats as any[])?.[0]?.count || 0;
 
     // Total Assets Calculation
     const totalLiquidBalance = cashBalance + bankBalance + mfsBalance;
@@ -606,7 +649,10 @@ export async function GET(req: NextRequest) {
         cancelledOrdersCount,
         totalStockQuantity: stockStats.totalStockQuantity,
         totalStockValue: stockStats.totalStockValue,
-        totalProductsCount: stockStats.totalProductsCount,
+        totalProductsCount: totalAllProductsCount,
+        motherProductsCount,
+        resellerProductsCount,
+        pendingApprovalProductsCount,
         cashBalance,
         bankBalance,
         mfsBalance,
@@ -620,11 +666,14 @@ export async function GET(req: NextRequest) {
         billDueTotal,
         totalReceivable,
         totalAssetValue,
-        totalActiveLoansDue
+        totalActiveLoansDue,
+        supplierBillsDueTotal,
+        supplierBillsDueCount
       },
       lowStockProducts,
       chartData: completeChartData,
-      last7DaysStats: last7DaysList
+      last7DaysStats: last7DaysList,
+      topSellers: await getTopSellers(startDate, endDate)
     });
   } catch (error) {
     console.error('Dashboard Stats Error:', error);

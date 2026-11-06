@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     }
   );
 
-  const resellers = await Reseller.find().populate('userId', 'name email').sort({ createdAt: -1 }).lean();
+  const resellers = await Reseller.find().populate('userId', 'name email phone').sort({ createdAt: -1 }).lean();
 
   return NextResponse.json({ resellers });
 }
@@ -108,8 +108,50 @@ export async function PATCH(request: NextRequest) {
 
     if (status === 'active' && updated) {
       await User.findByIdAndUpdate(updated.userId, { role: 'reseller', resellerId: updated._id });
+      try {
+        const { createNotification } = await import('@/lib/notifications');
+        await createNotification({
+          userId: updated.userId,
+          resellerId: updated._id,
+          title: '🎉 Application Approved!',
+          message: 'Your reseller application has been approved. You can now access your reseller store dashboard.',
+          type: 'reseller',
+          link: '/reseller/dashboard',
+          sendPush: true,
+        });
+
+        // Send Approval Email to Reseller
+        const resellerUser = await User.findById(updated.userId).select('email name').lean() as any;
+        const targetEmail = updated.contact?.email || resellerUser?.email;
+        if (targetEmail) {
+          const { sendResellerApprovalEmail } = await import('@/lib/mail');
+          sendResellerApprovalEmail({
+            email: targetEmail,
+            name: resellerUser?.name || updated.pickupAddress?.contactPerson || updated.storeName,
+            storeName: updated.storeName,
+            subdomain: updated.subdomain,
+            customDomain: updated.customDomain,
+          }).catch((mailErr) => console.error('[Reseller Approval Mail Error]', mailErr));
+        }
+      } catch (e) {
+        console.error('[Reseller Approval Notification Error]', e);
+      }
     } else if (status === 'rejected' && updated) {
       await User.findByIdAndUpdate(updated.userId, { role: 'user' });
+      try {
+        const { createNotification } = await import('@/lib/notifications');
+        await createNotification({
+          userId: updated.userId,
+          resellerId: updated._id,
+          title: '❌ Application Declined',
+          message: 'Your reseller application could not be approved at this time.',
+          type: 'reseller',
+          link: '/login',
+          sendPush: true,
+        });
+      } catch (e) {
+        console.error('[Reseller Rejection Notification Error]', e);
+      }
     }
 
     return NextResponse.json({ success: true, reseller: updated });

@@ -16,6 +16,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Plus,
   Trash,
@@ -25,7 +26,9 @@ import {
   PlusCircle,
   Sparkles,
   Barcode,
-  RefreshCw
+  RefreshCw,
+  Video,
+  Info
 } from 'lucide-react';
 
 const generateBaseSku = () => {
@@ -70,6 +73,9 @@ const NovelEditor = dynamic(() => import('@/components/editor/NovelEditor'), {
 const productSchema = z.object({
   name: z.string().min(3, 'Name is required'),
   slug: z.string().min(3, 'Slug is required'),
+  metaTitle: z.string().max(70, 'Meta title must not exceed 70 characters').optional(),
+  metaDescription: z.string().max(160, 'Meta description must not exceed 160 characters').optional(),
+  videoUrl: z.string().optional(),
   description: z.string().min(10, 'Description is required'),
   tags: z.array(z.string()).default([]),
   price: z.union([z.coerce.number().min(0), z.literal('')]).optional(),
@@ -279,6 +285,9 @@ export function ResellerProductForm({ initialData, onCancel, onSuccess }: Resell
   const defaultValues: ProductFormValues = {
     name: initialData?.name || '',
     slug: initialData?.slug || '',
+    metaTitle: initialData?.metaTitle || '',
+    metaDescription: initialData?.metaDescription || '',
+    videoUrl: initialData?.videoUrl || '',
     description: initialData?.description || '',
     tags: initialData?.tags || [],
     price: initialData?.price ?? '',
@@ -306,7 +315,7 @@ export function ResellerProductForm({ initialData, onCancel, onSuccess }: Resell
       }
       return mainImages;
     })(),
-    isPublished: initialData?.isPublished ?? true,
+    isPublished: initialData?.isPublished ?? false,
     isFeatured: initialData?.isFeatured ?? false,
     isNewArrival: initialData?.isNewArrival ?? false,
     isFlashSale: initialData?.isFlashSale ?? false,
@@ -695,6 +704,93 @@ export function ResellerProductForm({ initialData, onCancel, onSuccess }: Resell
                     )}
                   />
                 </div>
+
+                {/* SEO & Media Fields (Before Description) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="metaTitle"
+                    render={({ field }) => {
+                      const charCount = (field.value || '').length;
+                      return (
+                        <FormItem>
+                          <div className="flex items-center justify-between">
+                            <FormLabel className="flex items-center gap-1.5">
+                              Meta Title
+                              <span className="text-[11px] font-normal text-muted-foreground">(SEO)</span>
+                            </FormLabel>
+                            <span className={`text-[11px] font-mono ${charCount > 70 ? 'text-destructive font-bold' : 'text-muted-foreground'}`}>
+                              {charCount}/70
+                            </span>
+                          </div>
+                          <FormControl>
+                            <Input
+                              placeholder="SEO title for search engines (max 70 chars)"
+                              maxLength={70}
+                              {...field}
+                              value={field.value || ''}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      );
+                    }}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="videoUrl"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="flex items-center gap-1.5">
+                          <Video className="size-3.5 text-red-500" />
+                          YouTube Video Link
+                          <span className="text-[11px] font-normal text-muted-foreground">(Optional)</span>
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="e.g. https://www.youtube.com/watch?v=... or https://youtu.be/..."
+                            {...field}
+                            value={field.value || ''}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <FormField
+                  control={form.control}
+                  name="metaDescription"
+                  render={({ field }) => {
+                    const charCount = (field.value || '').length;
+                    return (
+                      <FormItem>
+                        <div className="flex items-center justify-between">
+                          <FormLabel className="flex items-center gap-1.5">
+                            Meta Description
+                            <span className="text-[11px] font-normal text-muted-foreground">(SEO)</span>
+                          </FormLabel>
+                          <span className={`text-[11px] font-mono ${charCount > 160 ? 'text-destructive font-bold' : 'text-muted-foreground'}`}>
+                            {charCount}/160
+                          </span>
+                        </div>
+                        <FormControl>
+                          <Textarea
+                            placeholder="Brief summary shown in Google search results (max 160 chars)"
+                            maxLength={160}
+                            rows={2}
+                            className="resize-none"
+                            {...field}
+                            value={field.value || ''}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    );
+                  }}
+                />
+
                 <FormField
                   control={form.control}
                   name="description"
@@ -746,6 +842,23 @@ export function ResellerProductForm({ initialData, onCancel, onSuccess }: Resell
             <Card>
               <CardContent className="pt-6 space-y-4">
                 <Label className="text-base font-bold">Product Gallery Images</Label>
+
+                {/* Image Upload Best Practice Guideline */}
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs space-y-1.5 text-muted-foreground">
+                  <div className="flex items-center gap-1.5 font-semibold text-primary">
+                    <Info className="h-4 w-4 shrink-0" />
+                    <span>Image Upload Guidelines (For Best Quality & Zoom)</span>
+                  </div>
+                  <ul className="grid grid-cols-1 md:grid-cols-3 gap-x-3 gap-y-1 list-disc list-inside text-[11px] leading-relaxed">
+                    <li><strong>Close-up Shots:</strong> Frame product closely and centered; avoid tiny subject or far-away shots.</li>
+                    <li><strong>Clean Background:</strong> Use bright lighting with neutral/light background for true colors & texture.</li>
+                    <li><strong>Ratio:</strong> 1:1 square or 3:4 portrait ratio is recommended.</li>
+                  </ul>
+                  <div className="flex items-center gap-1.5 text-destructive font-semibold text-[11px] bg-destructive/10 border border-destructive/20 rounded-md px-2.5 py-1.5 mt-1">
+                    <span className="font-bold uppercase tracking-wider text-[10px] bg-destructive text-white px-1.5 py-0.5 rounded">Recommendation</span>
+                    <span>Upload in <strong>.webp</strong> format to ensure 100% original sharpness, zero quality loss, and instant loading!</span>
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {form.watch('images').map((url, index) => (
                     <div key={`${url}-${index}`} className="relative aspect-square rounded-md overflow-hidden border bg-muted">
@@ -786,10 +899,10 @@ export function ResellerProductForm({ initialData, onCancel, onSuccess }: Resell
                   <p className="text-xs text-muted-foreground mt-0.5">Set images and sizes for each color variant.</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    size="sm" 
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
                     className="bg-background hover:bg-muted text-xs transition-all border-primary/20"
                     onClick={autoGenerateAllVariantSkus}
                     title="Auto-generate or sync SKUs for all variations"
@@ -1096,7 +1209,7 @@ export function ResellerProductForm({ initialData, onCancel, onSuccess }: Resell
                             placeholder="0.00"
                             {...field}
                             value={field.value ?? ''}
-                           onChange={(e) => {
+                            onChange={(e) => {
                               const value = e.target.value === '' ? '' : (parseFloat(e.target.value) || 0);
                               field.onChange(value);
                               const prc = value === '' ? 0 : Number(value);

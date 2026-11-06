@@ -430,6 +430,7 @@ export async function POST(
         shippingAddress: {
           fullName: customer.name,
           phone: customer.phone,
+          email: customer.email || undefined,
           street: customer.address?.street || '',
           city: customer.address?.city || '',
           state: customer.address?.city || '',
@@ -611,6 +612,129 @@ export async function POST(
         }
       } catch (syncErr) {
         console.error('[Sync Error after storefront order creation]', syncErr);
+      }
+
+            // Instant Telegram & Web Push Notifications Alert for Reseller Store Order
+      try {
+        const { sendTelegramOrderNotification, checkAndNotifyLowStock } = await import('@/lib/telegram');
+        const { sendWebPushNotification } = await import('@/lib/webpush');
+        const { createAdminNotification, createNotification } = await import('@/lib/notifications');
+        createAdminNotification({
+          title: '🛒 New Order #' + order.shortId + ' (৳' + calculatedFinalTotal + ')',
+          message: 'Reseller: ' + (reseller.storeName || subdomain) + ' — ' + customer.name + ' (' + customer.phone + ')',
+          type: 'order',
+          link: '/admin/orders',
+          sendPush: false,
+        }).catch(err => console.error('[Reseller Order Admin Log Error]', err));
+        createNotification({
+          userId: reseller.userId,
+          resellerId: reseller._id,
+          title: '🎉 New Order #' + order.shortId + ' (৳' + calculatedFinalTotal + ')',
+          message: 'Customer: ' + customer.name + ' (' + customer.phone + ') • Profit: ৳' + totalCommission,
+          type: 'order',
+          link: '/reseller/orders',
+          sendPush: false,
+        }).catch(err => console.error('[Reseller Order Reseller Log Error]', err));
+
+        // Notify Supplier Resellers (whose uploaded products were ordered on this storefront)
+        if (uploaderItemsMap.size > 0) {
+          let supIdx = 1;
+          for (const [uploaderId, fItems] of uploaderItemsMap.entries()) {
+            const supCommission = fItems.reduce((sum: number, item: any) => sum + (Number(item.purchasePrice) || 0) * item.quantity, 0);
+            const supItemCount = fItems.reduce((sum: number, item: any) => sum + (Number(item.quantity) || 1), 0);
+            const supShortId = `${order.shortId}-F${supIdx}`;
+            Reseller.findById(uploaderId).select('userId').lean().then((supReseller: any) => {
+              createNotification({
+                userId: supReseller?.userId,
+                resellerId: uploaderId,
+                title: `📦 নতুন সাপ্লাই অর্ডার #${supShortId} (পে-আউট: ৳${supCommission})`,
+                message: `আপনার আপলোড করা প্রোডাক্টের ${supItemCount}টি আইটেম অর্ডার হয়েছে • আপনার সাপ্লাই পে-আউট: ৳${supCommission}`,
+                type: 'order',
+                link: '/reseller/orders',
+                sendPush: true,
+              }).catch(err => console.error('[Supplier Reseller Order Notif Error]', err));
+            }).catch(() => {});
+            supIdx++;
+          }
+        }
+        const itemsForNotification = Array.isArray(validatedItems)
+          ? validatedItems.map((it: any) => ({
+              name: it.name,
+              quantity: it.quantity,
+              price: it.retailPrice || it.price || 0,
+              size: it.size,
+              color: it.color,
+            }))
+          : [];
+        const fullAddressStr = [
+          customer.address,
+          customer.city,
+          customer.district,
+        ].filter(Boolean).join(', ');
+        sendTelegramOrderNotification({
+          orderId: order._id?.toString(),
+          shortId: order.shortId,
+          name: customer.name,
+          phone: customer.phone,
+          address: fullAddressStr,
+          totalAmount: calculatedFinalTotal,
+          deliveryCharge: calculatedDeliveryCharge,
+          paymentMethod: paymentMethod || 'COD',
+          paymentStatus: order.paymentStatus || 'Pending',
+          resellerStoreName: reseller.storeName || subdomain,
+          customerNote: notes,
+          items: itemsForNotification,
+        }).catch(err => console.error('[Reseller Order Telegram Alert Error]', err));
+
+        // Low Stock Alert for Admin
+        const uniqueProductIdsForStock = Array.from(new Set(validatedItems.map(i => (i.productId?._id || i.productId).toString())));
+        checkAndNotifyLowStock(uniqueProductIdsForStock).catch(err => console.error('[Reseller Low Stock Telegram Alert Error]', err));
+        sendWebPushNotification(
+          {
+            title: '🛒 নতুন অর্ডার #' + order.shortId + '! (৳' + calculatedFinalTotal + ')',
+            body: 'রিসেলার: ' + (reseller.storeName || subdomain) + ' — ' + customer.name + ' (' + customer.phone + ')',
+            url: '/admin/orders',
+          },
+          { resellerId: reseller._id }
+        ).catch(err => console.error('[Reseller Order WebPush Alert Error]', err));
+
+        // Send Order Confirmation Email to Customer (if valid email provided)
+        const customerEmail = customer.email;
+        if (customerEmail && !customerEmail.endsWith('@store.com')) {
+          const { sendCustomerOrderPlacedEmail } = await import('@/lib/mail');
+          const rootDomain = process.env.NEXT_PUBLIC_ROOT_DOMAIN || 'swapnobaz.com';
+          const storeUrl = reseller.customDomain ? `https://${reseller.customDomain}` : `https://${subdomain}.${rootDomain}`;
+          sendCustomerOrderPlacedEmail({
+            email: customerEmail,
+            customerName: customer.name,
+            orderId: order._id?.toString(),
+            shortId: order.shortId,
+            items: validatedItems.map((it: any) => ({
+              name: it.name,
+              quantity: it.quantity,
+              price: it.retailPrice,
+              image: it.image,
+              color: it.color,
+              size: it.size,
+            })),
+            subtotal: calculatedSubtotal,
+            deliveryCharge: calculatedDeliveryCharge,
+            couponDiscount: couponDiscountAmount,
+            totalAmount: calculatedFinalTotal,
+            paymentMethod: paymentMethod || 'COD',
+            shippingAddress: {
+              fullName: customer.name,
+              phone: customer.phone,
+              street: customer.address?.street || '',
+              city: customer.address?.city || '',
+              division: customer.address?.division || '',
+            },
+            storeName: reseller.storeName || subdomain,
+            storeUrl,
+          }).catch(err => console.error('[Reseller Order Placed Customer Mail Error]', err));
+        }
+      } catch (notifErr) {
+        console.error('[Reseller Store Order Notification Error]', notifErr);
       }
 
       return NextResponse.json({

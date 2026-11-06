@@ -40,7 +40,7 @@ const orderSchema = z.object({
   shippingAddress: z.object({
     fullName: z.string().min(2, 'Full name is required'),
     phone: z.string().min(10, 'Invalid phone number'),
-    email: z.string().email('Invalid email address'),
+    email: z.string().email('Invalid email address').or(z.literal('')).optional().transform(v => v || undefined),
     street: z.string().min(1, 'Street is required'),
     city: z.string().min(1, 'City is required'),
     state: z.string().min(1, 'State is required'),
@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
 
     if (sessionUser?.user?.id) {
       const loggedUser = await User.findOne({ _id: sessionUser.user.id }).session(session);
-      if (loggedUser && loggedUser.role === 'user') {
+      if (loggedUser) {
         user = loggedUser;
       }
     }
@@ -746,6 +746,118 @@ export async function POST(req: NextRequest) {
       console.error('Failed to revalidate products cache:', e);
     }
 
+    // Instant Telegram & Web Push Notifications Alert
+    try {
+      const { sendTelegramOrderNotification, checkAndNotifyLowStock } = await import('@/lib/telegram');
+      const { sendWebPushNotification } = await import('@/lib/webpush');
+      const { createAdminNotification, createNotification } = await import('@/lib/notifications');
+      const itemsForNotification = Array.isArray(newOrder.items)
+        ? newOrder.items.map((it: any) => ({
+            name: it.name,
+            quantity: it.quantity,
+            price: it.price,
+            size: it.size,
+            color: it.color,
+          }))
+        : [];
+      createAdminNotification({
+        title: '🛒 New Order #' + (newOrder.shortId || '') + ' (৳' + newOrder.totalAmount + ')',
+        message: shippingAddress.fullName + ' (' + shippingAddress.phone + ') — ' + itemsForNotification.length + ' item(s)',
+        type: 'order',
+        link: '/admin/orders',
+        sendPush: false,
+      }).catch(err => console.error('[Order Admin Notification Error]', err));
+
+      // Notify Supplier Resellers (whose uploaded products were ordered on the Mother Shop)
+      if (uploaderItemsMap.size > 0) {
+        let supIdx = 1;
+        for (const [uploaderId, fItems] of uploaderItemsMap.entries()) {
+          const supCommission = fItems.reduce((sum: number, it: any) => sum + (Number(it.purchasePrice) || 0) * it.quantity, 0);
+          const supItemCount = fItems.reduce((sum: number, it: any) => sum + (Number(it.quantity) || 1), 0);
+          const supShortId = uploaderItemsMap.size === 1 ? newOrder.shortId : `${newOrder.shortId}-M${supIdx}`;
+          Reseller.findById(uploaderId).select('userId').lean().then((supReseller: any) => {
+            createNotification({
+              userId: supReseller?.userId,
+              resellerId: uploaderId,
+              title: `📦 নতুন সাপ্লাই অর্ডার #${supShortId} (পে-আউট: ৳${supCommission})`,
+              message: `মাদার শপে আপনার প্রোডাক্টের ${supItemCount}টি আইটেম অর্ডার হয়েছে • আপনার সাপ্লাই পে-আউট: ৳${supCommission}`,
+              type: 'order',
+              link: '/reseller/orders',
+              sendPush: true,
+            }).catch(err => console.error('[Mother Order Supplier Notif Error]', err));
+          }).catch(() => {});
+          supIdx++;
+        }
+      }
+      const fullAddressStr = [
+        shippingAddress.street,
+        shippingAddress.city,
+        shippingAddress.state,
+        shippingAddress.division,
+      ].filter(Boolean).join(', ');
+      sendTelegramOrderNotification({
+        orderId: newOrder._id?.toString(),
+        shortId: newOrder.shortId,
+        name: shippingAddress.fullName,
+        phone: shippingAddress.phone,
+        address: fullAddressStr,
+        totalAmount: newOrder.totalAmount,
+        deliveryCharge: newOrder.deliveryCharge,
+        paymentMethod: newOrder.paymentMethod,
+        paymentStatus: newOrder.paymentStatus,
+        source: 'মাদার শপ',
+        customerNote: newOrder.customerNote,
+        items: itemsForNotification,
+      }).catch(err => console.error('[Telegram Alert Error]', err));
+
+      // Low Stock Instant Alert for Admin
+      const uniqueProductIdsForStock = Array.from(new Set(successfulDeductions.map(d => d.productId)));
+      checkAndNotifyLowStock(uniqueProductIdsForStock).catch(err => console.error('[Low Stock Telegram Alert Error]', err));
+      sendWebPushNotification(
+        {
+          title: '🛒 নতুন অর্ডার #' + (newOrder.shortId || '') + '! (৳' + newOrder.totalAmount + ')',
+          body: shippingAddress.fullName + ' (' + shippingAddress.phone + ') — ' + itemsForNotification.length + 'টি আইটেম।',
+          url: '/admin/orders',
+        },
+        { isMotherOrder: true }
+      ).catch(err => console.error('[WebPush Alert Error]', err));
+
+      // Send Order Confirmation Email to Customer (if valid email provided)
+      const customerEmail = shippingAddress.email;
+      if (customerEmail && !customerEmail.endsWith('@store.com')) {
+        const { sendCustomerOrderPlacedEmail } = await import('@/lib/mail');
+        sendCustomerOrderPlacedEmail({
+          email: customerEmail,
+          customerName: shippingAddress.fullName,
+          orderId: newOrder._id?.toString(),
+          shortId: newOrder.shortId,
+          items: validatedItems.map((it: any) => ({
+            name: it.name,
+            quantity: it.quantity,
+            price: it.price,
+            image: it.image,
+            color: it.color,
+            size: it.size,
+          })),
+          subtotal: baseTotal - serverComputedDeliveryCharge + (couponDiscountAmount || 0),
+          deliveryCharge: serverComputedDeliveryCharge,
+          couponDiscount: couponDiscountAmount,
+          totalAmount: baseTotal,
+          paymentMethod: newOrder.paymentMethod,
+          shippingAddress: {
+            fullName: shippingAddress.fullName,
+            phone: shippingAddress.phone,
+            street: shippingAddress.street,
+            city: shippingAddress.city,
+            division: shippingAddress.division,
+            thana: (shippingAddress as any).thana || shippingAddress.state || '',
+          },
+        }).catch(err => console.error('[Order Placed Customer Mail Error]', err));
+      }
+    } catch (notifErr) {
+      console.error('[Order Notification Error]', notifErr);
+    }
+
     return NextResponse.json(newOrder, { status: 201 });
 
   } catch (error: any) {
@@ -880,7 +992,14 @@ export async function GET(req: NextRequest) {
     let query: any = { deletedAt: null };
     if (fetchAll && isAdmin) {
       if (status && status !== 'All') {
-        query.status = status;
+        if (status === 'Paid') {
+          query.$and = query.$and || [];
+          query.$and.push({
+            $or: [{ status: 'Paid' }, { paymentStatus: 'Paid' }]
+          });
+        } else {
+          query.status = status;
+        }
       }
       if (resellerId && resellerId !== 'all') {
         const ResellerOrder = (await import('@/models/ResellerOrder')).default;
@@ -1015,27 +1134,44 @@ export async function GET(req: NextRequest) {
     };
 
     if (fetchAll && isAdmin) {
-      const countQuery = { ...query };
+      const countQuery: any = { ...query };
       delete countQuery.status; // Remove status filter to count all
+      if (Array.isArray(countQuery.$and)) {
+        countQuery.$and = countQuery.$and.filter(
+          (cond: any) => !(Array.isArray(cond?.$or) && cond.$or.some((c: any) => c.paymentStatus === 'Paid'))
+        );
+        if (countQuery.$and.length === 0) delete countQuery.$and;
+      }
 
-      const statusCounts = await Order.aggregate([
-        { $match: countQuery },
-        { $group: { _id: "$status", count: { $sum: 1 } } }
+      const paidCountQuery: any = {
+        ...countQuery,
+        $and: [
+          ...(countQuery.$and || []),
+          { $or: [{ status: 'Paid' }, { paymentStatus: 'Paid' }] }
+        ]
+      };
+
+      const [statusCounts, totalAll, paidTotal] = await Promise.all([
+        Order.aggregate([
+          { $match: countQuery },
+          { $group: { _id: "$status", count: { $sum: 1 } } }
+        ]),
+        Order.countDocuments(countQuery),
+        Order.countDocuments(paidCountQuery),
       ]);
 
-      const totalAll = await Order.countDocuments(countQuery);
       counts.all = totalAll;
 
       statusCounts.forEach((sc: any) => {
         if (sc._id === 'Order Placed') counts.placed = sc.count;
         else if (sc._id === 'Confirmed') counts.confirmed = sc.count;
-        else if (sc._id === 'Paid') counts.paid = sc.count;
         else if (sc._id === 'Hold') counts.hold = sc.count;
         else if (sc._id === 'Ready for Delivery') counts.ready = sc.count;
         else if (sc._id === 'Released for Delivery') counts.released = sc.count;
         else if (sc._id === 'Delivered') counts.delivered = sc.count;
         else if (sc._id === 'Cancelled') counts.cancelled = sc.count;
       });
+      counts.paid = paidTotal;
     }
     
     let ordersQuery = Order.find(query).sort({ createdAt: -1 });
@@ -1050,7 +1186,7 @@ export async function GET(req: NextRequest) {
       .populate('storefrontResellerId', 'storeName subdomain customDomain')
       .populate({
         path: 'items.product',
-        select: 'name uploadedBy',
+        select: 'name slug isMotherProduct uploadedBy',
         populate: {
           path: 'uploadedBy',
           select: 'storeName subdomain customDomain',

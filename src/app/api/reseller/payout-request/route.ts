@@ -101,10 +101,70 @@ export async function POST(request: NextRequest) {
         payoutMethod: method,
         payoutReference: number, // account number
         destinationAccountId,
+        balanceAfter: updatedReseller.walletBalance,
       }], { session: sessionConn });
 
       await sessionConn.commitTransaction();
       sessionConn.endSession();
+
+      // Dispatch Notifications to Admin & Reseller
+      try {
+        const { createAdminNotification, createNotification } = await import('@/lib/notifications');
+        createAdminNotification({
+          title: '💸 New Payout Request',
+          message: `${reseller.storeName || 'Reseller'} requested a withdrawal of ৳${amount}.`,
+          type: 'payout',
+          link: '/admin/payouts',
+          sendPush: true,
+        }).catch(err => console.error('[Payout Admin Notif Error]', err));
+
+        createNotification({
+          userId: reseller.userId,
+          resellerId: reseller._id,
+          title: '💸 Payout Request Submitted',
+          message: `Your withdrawal request of ৳${amount} has been submitted and is pending admin approval.`,
+          type: 'payout',
+          link: '/reseller/wallet',
+          sendPush: false,
+        }).catch(err => console.error('[Payout Reseller Log Error]', err));
+
+        // Instant Telegram Alert for Reseller Payout Request
+        try {
+          const { sendTelegramPayoutNotification } = await import('@/lib/telegram');
+          sendTelegramPayoutNotification({
+            resellerStoreName: reseller.storeName || 'Reseller Store',
+            resellerName: reseller.pickupAddress?.contactPerson || session.user.name || reseller.storeName,
+            amount,
+            payoutMethod: method,
+            accountNumber: number,
+            balanceAfter: updatedReseller.walletBalance,
+          }).catch(err => console.error('[Payout Telegram Alert Error]', err));
+        } catch (tgErr) {
+          console.error('[Payout Telegram Alert Import Error]', tgErr);
+        }
+
+        // Send Reseller Payout Request Confirmation Email (non-blocking)
+        try {
+          const resellerEmail = reseller.contact?.email || session.user.email;
+          if (resellerEmail) {
+            const { sendResellerPayoutStatusEmail } = await import('@/lib/mail');
+            sendResellerPayoutStatusEmail({
+              email: resellerEmail,
+              resellerName: reseller.pickupAddress?.contactPerson || session.user.name || reseller.storeName || 'Reseller',
+              storeName: reseller.storeName || 'Reseller Store',
+              amount,
+              payoutMethod: method,
+              accountNumber: number,
+              status: 'requested',
+              balanceAfter: updatedReseller.walletBalance,
+            }).catch(err => console.error('[Payout Request Email Error]', err));
+          }
+        } catch (emailErr) {
+          console.error('[Payout Request Email Import Error]', emailErr);
+        }
+      } catch (notifErr) {
+        console.error('[Payout Notification Dispatch Error]', notifErr);
+      }
 
       return NextResponse.json({
         success: true,
