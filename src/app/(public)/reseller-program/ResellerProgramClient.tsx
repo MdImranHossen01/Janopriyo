@@ -546,11 +546,19 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
             )}
 
             {/* Pricing Cards Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8 items-stretch">
+            <div
+              className={`items-stretch ${
+                packages?.length === 1
+                  ? 'flex justify-center max-w-xl md:max-w-2xl mx-auto w-full'
+                  : packages?.length === 2
+                  ? 'grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8 max-w-4xl mx-auto'
+                  : 'grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8'
+              }`}
+            >
               {packages?.map((pkg) => (
                 <div
                   key={pkg.id}
-                  className={`rounded-3xl bg-white text-slate-900 flex flex-col justify-between overflow-hidden shadow-2xl transition-all duration-300 relative ${
+                  className={`w-full rounded-3xl bg-white text-slate-900 flex flex-col justify-between overflow-hidden shadow-2xl transition-all duration-300 relative ${
                     pkg.popular
                       ? 'ring-4 ring-purple-400 md:-translate-y-2'
                       : 'border border-white/20'
@@ -656,7 +664,13 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
                       <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
                         মূল সুবিধাসমূহ
                       </p>
-                      <ul className="space-y-2.5 text-xs text-slate-700">
+                      <ul
+                        className={`text-xs text-slate-700 ${
+                          packages?.length === 1
+                            ? 'grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-x-8 sm:gap-y-3'
+                            : 'space-y-2.5'
+                        }`}
+                      >
                         {pkg.features?.map((feat, idx) => (
                           <li
                             key={idx}
