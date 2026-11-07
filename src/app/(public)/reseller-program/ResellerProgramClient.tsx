@@ -499,36 +499,11 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
         <section className="py-8 px-4">
           <div className="max-w-7xl mx-auto">
 
-            {/* Toggle Container */}
-            <div className="flex flex-col items-center justify-center gap-3 mb-8">
-              <div className="p-1.5 bg-black/40 border border-white/15 rounded-full inline-flex items-center backdrop-blur-md shadow-inner">
-                <button
-                  onClick={() => setBillingCycle('monthly')}
-                  className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
-                    billingCycle === 'monthly'
-                      ? 'bg-white text-purple-950 shadow-md'
-                      : 'text-purple-200/70 hover:text-white'
-                  }`}
-                >
-                  মাসিক
-                </button>
-                <button
-                  onClick={() => setBillingCycle('yearly')}
-                  className={`px-6 py-2 rounded-full text-sm font-bold flex items-center gap-2 transition-all ${
-                    billingCycle === 'yearly'
-                      ? 'bg-white text-purple-950 shadow-md'
-                      : 'text-purple-200/70 hover:text-white'
-                  }`}
-                >
-                  <span>বাৎসরিক</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-900 text-purple-200 font-extrabold">
-                    ১ মাস ফ্রি
-                  </span>
-                </button>
+            {/* Header Badge */}
+            <div className="flex flex-col items-center justify-center gap-2 mb-8">
+              <div className="px-5 py-2 rounded-full bg-white/10 border border-white/15 text-purple-200 text-xs sm:text-sm font-semibold backdrop-blur-md shadow-inner">
+                ⚡ আপনার ব্যবসার সুবিধা অনুযায়ী প্যাকেজের মেয়াদ বেছে নিন
               </div>
-              <p className="text-xs text-purple-200/60 text-center">
-                নিচের সবগুলো প্যাকেজের মূল্য এখানের সিলেকশন অনুযায়ী পরিবর্তিত হবে
-              </p>
             </div>
 
             {/* Admin Add Package Button */}
@@ -615,34 +590,36 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
                     <h3 className="text-2xl font-black text-slate-900">{pkg.name}</h3>
                     <p className="text-xs text-slate-500 mt-1 mb-4">{pkg.tagline}</p>
 
-                    {/* Setup Price */}
+                    {/* Price Info */}
                     <div className="space-y-1 mb-4">
-                      <p className="text-xs text-slate-400 line-through">
-                        নিয়মিত সেটআপ চার্জ: ৳{pkg.regularSetup.toLocaleString()}
-                      </p>
+                      {pkg.regularSetup > pkg.offerSetup && (
+                        <p className="text-xs text-slate-400 line-through">
+                          নিয়মিত মূল্য: ৳{pkg.regularSetup.toLocaleString()}
+                        </p>
+                      )}
                       <div className="flex items-baseline gap-1.5">
                         <span className="text-3xl sm:text-4xl font-black text-slate-900">
                           ৳ {pkg.offerSetup.toLocaleString()}
                         </span>
-                        <span className="text-xs text-slate-500 font-medium">সেটআপ (এককালীন)</span>
+                        <span className="text-xs text-slate-500 font-medium">/ {pkg.name.split(' ')[0]}</span>
                       </div>
-                      <div className="pt-1">
-                        <span className="inline-block px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
-                          ✔ {pkg.savingsPct} সাশ্রয়
-                        </span>
-                      </div>
+                      {pkg.savingsPct && (
+                        <div className="pt-1">
+                          <span className="inline-block px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
+                            ✔ {pkg.savingsPct} সাশ্রয়
+                          </span>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Monthly or Yearly Fee Info */}
-                    <div className="py-2 px-3 rounded-xl bg-slate-50 border border-slate-100 text-xs text-slate-600 mb-6">
-                      {billingCycle === 'monthly' ? (
-                        <p>
-                          মাসিক চার্জ: <strong className="text-slate-900">৳{pkg.monthlyFee}</strong> (সেটআপের পরবর্তী মাস থেকে নেয়া হবে)
-                        </p>
+                    {/* Duration Info */}
+                    <div className="py-2.5 px-3 rounded-xl bg-slate-50 border border-slate-100 text-xs text-slate-600 mb-6">
+                      {pkg.id === '1-month' ? (
+                        <p>মেয়াদ: <strong className="text-slate-900">১ মাস</strong> (নিয়মিত মাসিক প্ল্যান)</p>
+                      ) : pkg.id === '6-months' ? (
+                        <p>মেয়াদ: <strong className="text-slate-900">৬ মাস</strong> (প্রতি মাসে মাত্র <strong className="text-slate-900">৳৩৩৩</strong>)</p>
                       ) : (
-                        <p>
-                          বাৎসরিক মোট: <strong className="text-slate-900">৳{pkg.yearlyTotal.toLocaleString()}</strong> ({pkg.yearlySavings})
-                        </p>
+                        <p>মেয়াদ: <strong className="text-slate-900">১ বছর</strong> (প্রতি মাসে মাত্র <strong className="text-slate-900">৳২৫০</strong>)</p>
                       )}
                     </div>
 
@@ -654,7 +631,7 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
                         pkg.btnColor || 'bg-purple-600 hover:bg-purple-700 text-white'
                       }`}
                     >
-                      <Link href={`/reseller/register?plan=${pkg.id}&billing=${billingCycle}`}>
+                      <Link href={`/reseller/register?plan=${pkg.id}`}>
                         এই প্যাকেজ নিন <ArrowRight className="h-4 w-4 ml-2 inline" />
                       </Link>
                     </Button>
