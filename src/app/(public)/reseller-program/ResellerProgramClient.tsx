@@ -19,7 +19,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { DEFAULT_RESELLER_PROGRAM_DATA } from '@/lib/default-reseller-program';
+import { DEFAULT_RESELLER_PROGRAM_DATA, sanitizeResellerProgramData } from '@/lib/default-reseller-program';
 import { IResellerProgramData, IResellerPackage, IFaqItem } from '@/types/reseller-program';
 
 import { IconRenderer } from '@/components/reseller-program/IconRenderer';
@@ -32,6 +32,7 @@ import { EditWorkflowDialog } from '@/components/reseller-program/EditWorkflowDi
 import { EditComparisonTableDialog } from '@/components/reseller-program/EditComparisonTableDialog';
 import { EditFaqDialog } from '@/components/reseller-program/EditFaqDialog';
 import { EditImportantInfoDialog } from '@/components/reseller-program/EditImportantInfoDialog';
+import { EmbeddedResellerRegisterForm } from '@/components/reseller-program/EmbeddedResellerRegisterForm';
 
 interface ResellerProgramClientProps {
   initialData?: IResellerProgramData;
@@ -50,10 +51,41 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
     userEmail === 'imranshuvo101@gmail.com';
 
   // Page State
-  const [pageData, setPageData] = useState<IResellerProgramData>(initialData || DEFAULT_RESELLER_PROGRAM_DATA);
-  const [savedData, setSavedData] = useState<IResellerProgramData>(initialData || DEFAULT_RESELLER_PROGRAM_DATA);
+  const sanitizedInitial = sanitizeResellerProgramData(initialData || DEFAULT_RESELLER_PROGRAM_DATA);
+  const [pageData, setPageData] = useState<IResellerProgramData>(sanitizedInitial);
+  const [savedData, setSavedData] = useState<IResellerProgramData>(sanitizedInitial);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [selectedPlanId, setSelectedPlanId] = useState<string>('1-year');
+
+  const scrollToRegistrationForm = (planId?: string) => {
+    if (planId) {
+      setSelectedPlanId(planId);
+    }
+    const formEl = document.getElementById('reseller-registration-form');
+    if (formEl) {
+      formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const scrollToPackagesSection = () => {
+    const pkgEl = document.getElementById('packages-card-section') || document.getElementById('packages');
+    if (pkgEl) {
+      pkgEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const hash = window.location.hash.replace('#', '');
+      setTimeout(() => {
+        const target = document.getElementById(hash);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 150);
+    }
+  }, []);
 
   // Edit Mode & Loading states
   const [isEditMode, setIsEditMode] = useState<boolean>(true);
@@ -75,8 +107,9 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
   // Sync initialData or fetch if missing
   useEffect(() => {
     if (initialData) {
-      setPageData(initialData);
-      setSavedData(initialData);
+      const cleaned = sanitizeResellerProgramData(initialData);
+      setPageData(cleaned);
+      setSavedData(cleaned);
       return;
     }
     async function loadData() {
@@ -146,7 +179,7 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
           confirmButtonColor: '#7c3aed',
         });
       } else {
-        throw new Error(result.message || 'সংরক্ষণ ব্যর্থ হয়েছে');
+        throw new Error(result.message || 'সংরক্ষণ ব্যর্থ হয়েছেe');
       }
     } catch (error: any) {
       console.error('Save error:', error);
@@ -317,7 +350,7 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
 
   return (
     <div className="min-h-screen bg-[#240645] text-white selection:bg-pink-500 selection:text-white font-sans overflow-x-hidden">
-      
+
       {/* Background Ambient Glows */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute top-0 left-1/4 w-[700px] h-[700px] bg-purple-600/20 rounded-full blur-[140px]" />
@@ -346,7 +379,7 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
 
         {/* ── 1. Hero Banner Section ── */}
         <section className="relative overflow-hidden bg-gradient-to-b from-amber-500/10 via-purple-950/40 to-transparent py-14 sm:py-20 border-b border-white/10">
-          
+
           {/* Admin Edit Trigger */}
           {showEditControls && (
             <div className="container mx-auto px-4 max-w-7xl mb-4 flex justify-end">
@@ -364,7 +397,7 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
 
           <div className="container mx-auto px-4 max-w-7xl">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-12 items-center">
-              
+
               {/* Left Content */}
               <div className="space-y-6 text-center lg:text-left">
                 <div className="inline-flex items-center gap-2 bg-amber-500/15 text-amber-300 border border-amber-500/30 px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold tracking-wide">
@@ -396,17 +429,24 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
                 )}
 
                 <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-4 pt-2">
-                  <Button asChild size="lg" className="w-full sm:w-auto font-bold text-base px-8 py-6 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-lg shadow-amber-500/20 hover:shadow-xl transition-all">
-                    <Link href={hero.registerBtnLink || '/reseller/register'} className="flex items-center gap-2">
-                      <Store className="h-5 w-5" />
-                      {hero.registerBtnText}
-                      <ArrowRight className="h-4 w-4" />
-                    </Link>
+                  <Button
+                    type="button"
+                    size="lg"
+                    onClick={() => scrollToRegistrationForm()}
+                    className="w-full sm:w-auto font-bold text-base px-8 py-6 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-lg shadow-amber-500/20 hover:shadow-xl transition-all cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <Store className="h-5 w-5" />
+                    <span>{hero.registerBtnText}</span>
+                    <ArrowRight className="h-4 w-4" />
                   </Button>
-                  <Button asChild variant="outline" size="lg" className="w-full sm:w-auto font-semibold px-6 py-6 rounded-xl border-white/20 bg-white/10 hover:bg-white/20 text-white backdrop-blur-md">
-                    <Link href={hero.viewPackagesBtnLink || '#packages'}>
-                      {hero.viewPackagesBtnText}
-                    </Link>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    onClick={scrollToPackagesSection}
+                    className="w-full sm:w-auto font-semibold px-6 py-6 rounded-xl border-white/20 bg-white/10 hover:bg-white/20 text-white backdrop-blur-md cursor-pointer"
+                  >
+                    <span>{hero.viewPackagesBtnText}</span>
                   </Button>
                 </div>
               </div>
@@ -431,9 +471,9 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
         </section>
 
         {/* ── 2. Pricing Packages Header & Value Badges ── */}
-        <section id="packages" className="pt-16 pb-10 px-4">
+        <section id="packages" className="pt-16 pb-10 px-4 scroll-mt-6">
           <div className="max-w-5xl mx-auto text-center space-y-6 relative">
-            
+
             {/* Admin Edit Trigger */}
             {showEditControls && (
               <div className="flex justify-end mb-2">
@@ -496,7 +536,7 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
         </section>
 
         {/* ── 3. Pricing Cards & Billing Toggle ── */}
-        <section className="py-8 px-4">
+        <section id="packages-card-section" className="py-8 px-4 scroll-mt-6">
           <div className="max-w-7xl mx-auto">
 
             {/* Header Badge */}
@@ -520,38 +560,18 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
               </div>
             )}
 
-            {/* Pricing Cards Grid */}
-            <div
-              className={`items-stretch ${
-                packages?.length === 1
-                  ? 'flex justify-center max-w-xl md:max-w-2xl mx-auto w-full'
-                  : packages?.length === 2
-                  ? 'grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8 max-w-4xl mx-auto'
-                  : 'grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8'
-              }`}
-            >
-              {packages?.map((pkg) => (
+            {/* Single Unified Feature Card (Centered) */}
+            <div className="flex justify-center max-w-xl md:max-w-2xl mx-auto w-full items-stretch">
+              {(packages?.slice(0, 1) || DEFAULT_RESELLER_PROGRAM_DATA.packages.slice(0, 1)).map((pkg) => (
                 <div
                   key={pkg.id}
-                  className={`w-full rounded-3xl bg-white text-slate-900 flex flex-col justify-between overflow-hidden shadow-2xl transition-all duration-300 relative ${
-                    pkg.popular
-                      ? 'ring-4 ring-purple-400 md:-translate-y-2'
-                      : 'border border-white/20'
-                  }`}
+                  className="w-full rounded-3xl bg-white text-slate-900 flex flex-col justify-between overflow-hidden shadow-2xl transition-all duration-300 relative border border-white/20"
                 >
-                  {/* Top Popular Banner */}
-                  {pkg.popular && (
-                    <div className="bg-purple-900 text-amber-300 py-1.5 px-4 text-center text-xs font-bold flex items-center justify-center gap-1.5">
-                      <Star className="h-3.5 w-3.5 fill-amber-300" />
-                      <span>সবচেয়ে জনপ্রিয় প্যাকেজ</span>
-                    </div>
-                  )}
-
                   {/* Admin Edit Package Controls */}
                   {showEditControls && (
                     <div className="p-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-white">
                       <span className="text-[11px] font-bold text-purple-300 px-2">
-                        আইডি: {pkg.id}
+                        প্যাকেজ ফিচার কার্ড ({pkg.id})
                       </span>
                       <div className="flex items-center gap-1">
                         <Button
@@ -563,101 +583,77 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
                         >
                           <Edit3 className="h-3 w-3 mr-1" /> এডিট
                         </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleDeletePackage(pkg.id, pkg.name)}
-                          className="h-7 px-2 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/40"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
                       </div>
                     </div>
                   )}
 
-                  <div className="p-6 sm:p-7 flex-1 flex flex-col">
+                  <div className="p-6 sm:p-8 flex-1 flex flex-col">
                     {/* Header */}
                     <div className="flex items-center justify-between mb-2">
                       <div className="text-3xl">
                         <IconRenderer
                           name={pkg.icon}
-                          className={`h-8 w-8 ${pkg.iconColor || 'text-purple-600'}`}
+                          className={`h-8 w-8 ${pkg.iconColor || 'text-emerald-600'}`}
                         />
                       </div>
+                      <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
+                        সবগুলো প্ল্যানে একই সুবিধা
+                      </span>
                     </div>
 
-                    <h3 className="text-2xl font-black text-slate-900">{pkg.name}</h3>
-                    <p className="text-xs text-slate-500 mt-1 mb-4">{pkg.tagline}</p>
+                    <h3 className="text-2xl sm:text-3xl font-black text-slate-900">
+                      জানপ্রিয় রিসেলার স্টোর প্যাকেজ
+                    </h3>
+                    <p className="text-xs sm:text-sm text-slate-500 mt-1 mb-5">
+                      আপনার ব্যবসার সুবিধা অনুযায়ী নিচে ১ মাস, ৬ মাস অথবা ১ বছরের মেয়াদ সিলেক্ট করে রেজিস্ট্রেশন করুন
+                    </p>
 
-                    {/* Price Info */}
-                    <div className="space-y-1 mb-4">
-                      {pkg.regularSetup > pkg.offerSetup && (
-                        <p className="text-xs text-slate-400 line-through">
-                          নিয়মিত মূল্য: ৳{pkg.regularSetup.toLocaleString()}
-                        </p>
-                      )}
-                      <div className="flex items-baseline gap-1.5">
-                        <span className="text-3xl sm:text-4xl font-black text-slate-900">
-                          ৳ {pkg.offerSetup.toLocaleString()}
-                        </span>
-                        <span className="text-xs text-slate-500 font-medium">/ {pkg.name.split(' ')[0]}</span>
+                    {/* Price Overview Box */}
+                    <div className="grid grid-cols-3 gap-2.5 p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 mb-6 text-center">
+                      <div className="p-2 rounded-xl bg-white border border-slate-200/60 shadow-xs">
+                        <p className="text-[11px] font-bold text-slate-500">১ মাস</p>
+                        <p className="text-lg sm:text-xl font-black text-slate-900">৳৫০০</p>
+                        <p className="text-[10px] text-slate-400">নিয়মিত প্ল্যান</p>
                       </div>
-                      {pkg.savingsPct && (
-                        <div className="pt-1">
-                          <span className="inline-block px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs border border-emerald-200">
-                            ✔ {pkg.savingsPct} সাশ্রয়
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Duration Info */}
-                    <div className="py-2.5 px-3 rounded-xl bg-slate-50 border border-slate-100 text-xs text-slate-600 mb-6">
-                      {pkg.id === '1-month' ? (
-                        <p>মেয়াদ: <strong className="text-slate-900">১ মাস</strong> (নিয়মিত মাসিক প্ল্যান)</p>
-                      ) : pkg.id === '6-months' ? (
-                        <p>মেয়াদ: <strong className="text-slate-900">৬ মাস</strong> (প্রতি মাসে মাত্র <strong className="text-slate-900">৳৩৩৩</strong>)</p>
-                      ) : (
-                        <p>মেয়াদ: <strong className="text-slate-900">১ বছর</strong> (প্রতি মাসে মাত্র <strong className="text-slate-900">৳২৫০</strong>)</p>
-                      )}
+                      <div className="p-2 rounded-xl bg-purple-50/70 border border-purple-200 shadow-xs relative">
+                        <p className="text-[11px] font-bold text-purple-700">৬ মাস</p>
+                        <p className="text-lg sm:text-xl font-black text-purple-900">৳২,০০০</p>
+                        <p className="text-[10px] font-bold text-emerald-600">৩৩% ছাড়</p>
+                      </div>
+                      <div className="p-2 rounded-xl bg-amber-50/70 border border-amber-200 shadow-xs">
+                        <p className="text-[11px] font-bold text-amber-800">১ বছর</p>
+                        <p className="text-lg sm:text-xl font-black text-slate-900">৳৩,০০০</p>
+                        <p className="text-[10px] font-bold text-emerald-600">৫০% ছাড়</p>
+                      </div>
                     </div>
 
                     {/* CTA Button */}
                     <Button
-                      asChild
+                      type="button"
                       size="lg"
-                      className={`w-full font-bold text-sm sm:text-base py-6 rounded-2xl mb-6 ${
-                        pkg.btnColor || 'bg-purple-600 hover:bg-purple-700 text-white'
-                      }`}
+                      onClick={() => scrollToRegistrationForm()}
+                      className={`w-full font-bold text-sm sm:text-base py-6 rounded-2xl mb-6 cursor-pointer flex items-center justify-center gap-2 ${pkg.btnColor || 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                        }`}
                     >
-                      <Link href={`/reseller/register?plan=${pkg.id}`}>
-                        এই প্যাকেজ নিন <ArrowRight className="h-4 w-4 ml-2 inline" />
-                      </Link>
+                      <span>এই প্যাকেজ নিন (নিচে ফরম পূরণ করুন)</span>
+                      <ArrowRight className="h-4 w-4" />
                     </Button>
 
                     {/* Features List */}
                     <div className="border-t border-slate-100 pt-5 mt-auto">
                       <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
-                        মূল সুবিধাসমূহ
+                        মূল সুবিধাসমূহ (সকল মেয়াদের জন্য প্রযোজ্য)
                       </p>
-                      <ul
-                        className={`text-xs text-slate-700 ${
-                          packages?.length === 1
-                            ? 'grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-x-8 sm:gap-y-3'
-                            : 'space-y-2.5'
-                        }`}
-                      >
+                      <ul className="text-xs text-slate-700 grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-x-8 sm:gap-y-3">
                         {pkg.features?.map((feat, idx) => (
                           <li
                             key={idx}
-                            className={`flex items-start gap-2 ${
-                              feat.highlight
+                            className={`flex items-start gap-2 ${feat.highlight
                                 ? 'bg-emerald-50 text-emerald-900 font-semibold p-1.5 rounded-lg -mx-1.5'
                                 : feat.excluded
-                                ? 'text-slate-400'
-                                : ''
-                            }`}
+                                  ? 'text-slate-400'
+                                  : ''
+                              }`}
                           >
                             {feat.excluded ? (
                               <span className="text-slate-300 shrink-0 font-bold mt-0.5">—</span>
@@ -678,10 +674,21 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
           </div>
         </section>
 
+        {/* ── 3.5 Embedded Reseller Registration Form ── */}
+        <section id="reseller-registration-form" className="py-16 sm:py-20 px-4 relative scroll-mt-6 border-b border-white/10 bg-black/20">
+          <div className="max-w-7xl mx-auto">
+            <EmbeddedResellerRegisterForm
+              packages={packages}
+              selectedPlanId={selectedPlanId}
+              onSelectPlanId={setSelectedPlanId}
+            />
+          </div>
+        </section>
+
         {/* ── 4. Why Choose Us / কেন আমাদের বেছে নেবেন? ── */}
         <section className="py-16 sm:py-20 px-4">
           <div className="max-w-7xl mx-auto">
-            
+
             {/* Header + Edit Button */}
             <div className="text-center space-y-2 mb-12 relative">
               {showEditControls && (
@@ -727,7 +734,7 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
         {/* ── 5. Workflow Timeline Steps ── */}
         <section className="py-16 px-4">
           <div className="max-w-7xl mx-auto">
-            
+
             {showEditControls && (
               <div className="flex justify-end mb-4">
                 <Button
@@ -847,9 +854,8 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
                     >
                       <span>{faq.q}</span>
                       <div
-                        className={`h-7 w-7 rounded-full bg-white/10 flex items-center justify-center shrink-0 transition-transform duration-200 ${
-                          isOpen ? 'rotate-180 bg-white/20' : ''
-                        }`}
+                        className={`h-7 w-7 rounded-full bg-white/10 flex items-center justify-center shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180 bg-white/20' : ''
+                          }`}
                       >
                         <ChevronDown className="h-4 w-4" />
                       </div>
@@ -870,7 +876,7 @@ export default function ResellerProgramClient({ initialData }: ResellerProgramCl
         <section className="py-12 pb-24 px-4">
           <div className="max-w-6xl mx-auto">
             <div className="rounded-3xl bg-white text-slate-900 p-6 sm:p-8 shadow-2xl space-y-4 relative">
-              
+
               {/* Admin Edit Trigger */}
               {showEditControls && (
                 <div className="absolute top-4 right-4">

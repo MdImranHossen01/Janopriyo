@@ -17,6 +17,7 @@ export const AVAILABLE_ICONS = [
   'Puzzle',
   'ShieldCheck',
   'Activity',
+  'Bell',
   'PhoneCall',
   'Package',
   'FileText',

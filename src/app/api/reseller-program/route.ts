@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { revalidatePath, revalidateTag } from 'next/cache';
 import connectToDatabase from '@/lib/db';
 import ResellerProgramPage from '@/models/ResellerProgramPage';
-import { DEFAULT_RESELLER_PROGRAM_DATA } from '@/lib/default-reseller-program';
+import { DEFAULT_RESELLER_PROGRAM_DATA, sanitizeResellerProgramData } from '@/lib/default-reseller-program';
 import { CACHE_TAGS } from '@/lib/data-fetching';
 import { auth } from '@/auth';
 
@@ -25,7 +25,7 @@ export async function GET() {
         ? doc.hero.benefits
         : DEFAULT_RESELLER_PROGRAM_DATA.hero.benefits;
 
-    const mergedData = {
+    const mergedData = sanitizeResellerProgramData({
       hero: {
         ...DEFAULT_RESELLER_PROGRAM_DATA.hero,
         ...(doc.hero || {}),
@@ -38,7 +38,7 @@ export async function GET() {
       comparisonTable: { ...DEFAULT_RESELLER_PROGRAM_DATA.comparisonTable, ...(doc.comparisonTable || {}) },
       faqs: { ...DEFAULT_RESELLER_PROGRAM_DATA.faqs, ...(doc.faqs || {}) },
       importantInfo: { ...DEFAULT_RESELLER_PROGRAM_DATA.importantInfo, ...(doc.importantInfo || {}) },
-    };
+    });
 
     return NextResponse.json({
       success: true,

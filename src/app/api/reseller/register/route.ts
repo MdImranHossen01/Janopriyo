@@ -26,6 +26,8 @@ export async function POST(request: NextRequest) {
       contactPerson,
       pickupPhone,
       pickupAddress: customPickupAddress,
+      subscriptionPlan,
+      manualPaymentDetails,
     } = body;
 
     if (!storeName || !subdomain || !phone) {
@@ -144,6 +146,8 @@ export async function POST(request: NextRequest) {
         thana: resolvedThana,
         address: resolvedAddress,
       },
+      subscriptionPlan: subscriptionPlan || {},
+      manualPaymentDetails: manualPaymentDetails || {},
     });
 
     // Seed default ledger accounts (Bank, Cash, AP, AR) and default categories
@@ -157,9 +161,12 @@ export async function POST(request: NextRequest) {
     // Trigger Admin & User Notifications
     try {
       const { createAdminNotification, createNotification } = await import('@/lib/notifications');
+      const paymentInfoStr = manualPaymentDetails?.methodName
+        ? ` | Paid ৳${manualPaymentDetails.amount || subscriptionPlan?.price || 0} via ${manualPaymentDetails.methodName.toUpperCase()}${manualPaymentDetails.providerName ? ` [${manualPaymentDetails.providerName}]` : ''} (${manualPaymentDetails.senderNumber || manualPaymentDetails.transactionId || ''})`
+        : '';
       await createAdminNotification({
         title: '👤 New Reseller Application',
-        message: `${newReseller.storeName} (${newReseller.subdomain}) applied for reseller approval.`,
+        message: `${newReseller.storeName} (${newReseller.subdomain}) applied for ${subscriptionPlan?.name || 'reseller'} approval${paymentInfoStr}.`,
         type: 'reseller',
         link: '/admin/resellers',
         sendPush: true,

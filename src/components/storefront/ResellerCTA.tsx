@@ -157,7 +157,7 @@ export function ResellerCTA() {
 
             <div className="flex flex-wrap items-center gap-3 pt-2">
               <Link
-                href={hero.registerBtnLink || '/reseller/register'}
+                href="/reseller-program#reseller-registration-form"
                 className="inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 font-bold text-sm sm:text-base py-3 px-6 rounded-xl transition-all duration-200 shadow-md hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0"
               >
                 <Sparkles className="h-4 w-4" />
@@ -165,7 +165,7 @@ export function ResellerCTA() {
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
-                href={hero.viewPackagesBtnLink || '/reseller-program'}
+                href="/reseller-program#packages-card-section"
                 className="inline-flex items-center justify-center gap-2 border border-border bg-card/60 hover:bg-accent hover:text-accent-foreground text-foreground font-semibold text-sm sm:text-base py-3 px-5 rounded-xl transition-all duration-200"
               >
                 {hero.viewPackagesBtnText || 'Learn More'}

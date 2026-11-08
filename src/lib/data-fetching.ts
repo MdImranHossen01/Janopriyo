@@ -373,7 +373,7 @@ export const getCachedResellerProgram = () => {
     async () => {
       await connectToDatabase();
       const ResellerProgramPage = (await import('@/models/ResellerProgramPage')).default;
-      const { DEFAULT_RESELLER_PROGRAM_DATA } = await import('@/lib/default-reseller-program');
+      const { DEFAULT_RESELLER_PROGRAM_DATA, sanitizeResellerProgramData } = await import('@/lib/default-reseller-program');
       const doc = await ResellerProgramPage.findOne().sort({ updatedAt: -1 }).lean();
 
       if (!doc) {
@@ -385,7 +385,7 @@ export const getCachedResellerProgram = () => {
           ? doc.hero.benefits
           : DEFAULT_RESELLER_PROGRAM_DATA.hero.benefits;
 
-      const mergedData = {
+      const mergedData = sanitizeResellerProgramData({
         hero: {
           ...DEFAULT_RESELLER_PROGRAM_DATA.hero,
           ...(doc.hero || {}),
@@ -398,7 +398,7 @@ export const getCachedResellerProgram = () => {
         comparisonTable: { ...DEFAULT_RESELLER_PROGRAM_DATA.comparisonTable, ...(doc.comparisonTable || {}) },
         faqs: { ...DEFAULT_RESELLER_PROGRAM_DATA.faqs, ...(doc.faqs || {}) },
         importantInfo: { ...DEFAULT_RESELLER_PROGRAM_DATA.importantInfo, ...(doc.importantInfo || {}) },
-      };
+      });
 
       return serialize(mergedData);
     },

@@ -92,6 +92,18 @@ export interface IReseller extends Document {
   suspendedAt?: Date;
   suspendReason?: string;
   expiresAt?: Date | null;
+  subscriptionPlan?: {
+    id?: string;
+    name?: string;
+    price?: number;
+  };
+  manualPaymentDetails?: {
+    methodName?: string;
+    providerName?: string;
+    senderNumber?: string;
+    transactionId?: string;
+    amount?: number;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -179,6 +191,24 @@ const ResellerSchema: Schema<IReseller> = new Schema(
     suspendedAt: { type: Date },
     suspendReason: { type: String },
     expiresAt: { type: Date, default: null },
+    subscriptionPlan: {
+      type: new Schema({
+        id: { type: String, default: '' },
+        name: { type: String, default: '' },
+        price: { type: Number, default: 0 },
+      }, { _id: false }),
+      default: {},
+    },
+    manualPaymentDetails: {
+      type: new Schema({
+        methodName: { type: String, default: '' },
+        providerName: { type: String, default: '' },
+        senderNumber: { type: String, default: '' },
+        transactionId: { type: String, default: '' },
+        amount: { type: Number, default: 0 },
+      }, { _id: false }),
+      default: {},
+    },
   },
   { timestamps: true }
 );

@@ -23,7 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Loader2, Check, X, ShieldAlert, Store, Search, ExternalLink, RefreshCw, Globe, MoreVertical, XCircle, Trash2, Truck, Calendar, CalendarDays, Clock, Percent, KeyRound } from 'lucide-react';
+import { Loader2, Check, X, ShieldAlert, Store, Search, ExternalLink, RefreshCw, Globe, MoreVertical, XCircle, Trash2, Truck, Calendar, CalendarDays, Clock, Percent, KeyRound, CreditCard, Eye, Copy, MapPin, Package } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -82,6 +82,15 @@ export default function AdminResellersPage() {
   const [systemFeePercent, setSystemFeePercent] = useState<number>(10);
   const [savingFee, setSavingFee] = useState(false);
 
+  // Application & Payment Details Dialog state
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [detailsReseller, setDetailsReseller] = useState<any>(null);
+
+  const openDetailsModal = (reseller: any) => {
+    setDetailsReseller(reseller);
+    setDetailsDialogOpen(true);
+  };
+
   const openFeeModal = (reseller: any) => {
     setSelectedFeeReseller(reseller);
     const fee = reseller.systemFeePercent !== undefined ? reseller.systemFeePercent : (reseller.commissionRate ?? 10);
@@ -130,9 +139,11 @@ export default function AdminResellersPage() {
       setExpiryDate(d.toISOString().split('T')[0]);
       setIsNoExpiry(false);
     } else {
-      // Default to +30 days
+      // Auto-select expiry days based on reseller's chosen subscription package
+      const planId = reseller.subscriptionPlan?.id;
+      const defaultDays = planId === '1-year' ? 365 : planId === '6-months' ? 180 : 30;
       const d = new Date();
-      d.setDate(d.getDate() + 30);
+      d.setDate(d.getDate() + defaultDays);
       setExpiryDate(d.toISOString().split('T')[0]);
       setIsNoExpiry(false);
     }
@@ -623,6 +634,37 @@ export default function AdminResellersPage() {
                                 {r.description}
                               </p>
                             )}
+                            {/* Selected Package & Payment Info Summary */}
+                            {(r.subscriptionPlan?.name || r.manualPaymentDetails?.methodName) && (
+                              <div className="pt-1 space-y-1">
+                                {r.subscriptionPlan?.name && (
+                                  <div className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/20">
+                                    <Package className="h-2.5 w-2.5" />
+                                    <span>{r.subscriptionPlan.name}</span>
+                                    {r.subscriptionPlan.price ? <span>(৳{r.subscriptionPlan.price})</span> : null}
+                                  </div>
+                                )}
+                                {r.manualPaymentDetails?.methodName && (
+                                  <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold flex flex-wrap items-center gap-1">
+                                    <CreditCard className="h-2.5 w-2.5 shrink-0" />
+                                    <span className="uppercase font-bold">{r.manualPaymentDetails.methodName}</span>
+                                    {r.manualPaymentDetails.providerName && (
+                                      <span>[{r.manualPaymentDetails.providerName}]</span>
+                                    )}
+                                    {r.manualPaymentDetails.senderNumber && (
+                                      <span className="font-mono bg-muted px-1 rounded">
+                                        No: {r.manualPaymentDetails.senderNumber}
+                                      </span>
+                                    )}
+                                    {r.manualPaymentDetails.transactionId && (
+                                      <span className="font-mono bg-muted px-1 rounded">
+                                        Trx: {r.manualPaymentDetails.transactionId}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell className="w-[19%] min-w-[150px] align-top py-3">
@@ -719,6 +761,25 @@ export default function AdminResellersPage() {
                                 Lifetime Access
                               </div>
                             )}
+                            <div className="pt-1 flex flex-wrap gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 text-[10px] px-2 font-semibold gap-1"
+                                onClick={() => openDetailsModal(r)}
+                              >
+                                <Eye className="h-3 w-3" /> Details & Payment
+                              </Button>
+                              {r.status === 'pending' && (
+                                <Button
+                                  size="sm"
+                                  className="h-6 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1"
+                                  onClick={() => openActivationModal(r)}
+                                >
+                                  <Check className="h-3 w-3" /> Approve
+                                </Button>
+                              )}
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell className="text-right w-[70px] align-top py-3">
@@ -730,6 +791,14 @@ export default function AdminResellersPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-52">
+                              <DropdownMenuItem
+                                className="cursor-pointer font-semibold text-xs"
+                                onClick={() => openDetailsModal(r)}
+                              >
+                                <Eye className="mr-2 h-4 w-4 text-primary" />
+                                View Application & Payment
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
                               {isSuperAdmin && (
                                 <>
                                   <DropdownMenuItem
@@ -918,9 +987,48 @@ export default function AdminResellersPage() {
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between pt-1 border-t">
-                      <div className="text-[11px] text-muted-foreground">
-                        {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ''}
+                    {(r.subscriptionPlan?.name || r.manualPaymentDetails?.methodName) && (
+                      <div className="p-2 rounded bg-emerald-500/5 border border-emerald-500/20 text-[10px] space-y-1">
+                        {r.subscriptionPlan?.name && (
+                          <div className="font-bold text-purple-700 dark:text-purple-300 flex items-center justify-between">
+                            <span>Package: {r.subscriptionPlan.name}</span>
+                            <span>৳{r.subscriptionPlan.price || 0}</span>
+                          </div>
+                        )}
+                        {r.manualPaymentDetails?.methodName && (
+                          <div className="text-emerald-700 dark:text-emerald-400 font-semibold flex flex-wrap gap-1.5">
+                            <span className="uppercase font-bold">{r.manualPaymentDetails.methodName}</span>
+                            {r.manualPaymentDetails.providerName && <span>[{r.manualPaymentDetails.providerName}]</span>}
+                            {r.manualPaymentDetails.senderNumber && (
+                              <span className="font-mono">No: {r.manualPaymentDetails.senderNumber}</span>
+                            )}
+                            {r.manualPaymentDetails.transactionId && (
+                              <span className="font-mono">Trx: {r.manualPaymentDetails.transactionId}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between pt-1 border-t gap-1.5">
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-[10px] px-2 font-semibold gap-1"
+                          onClick={() => openDetailsModal(r)}
+                        >
+                          <Eye className="h-3 w-3" /> Details
+                        </Button>
+                        {r.status === 'pending' && (
+                          <Button
+                            size="sm"
+                            className="h-7 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1"
+                            onClick={() => openActivationModal(r)}
+                          >
+                            <Check className="h-3 w-3" /> Approve
+                          </Button>
+                        )}
                       </div>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -1332,6 +1440,84 @@ export default function AdminResellersPage() {
               </Badge>
             </div>
 
+            {/* Package & Payment Verification Summary in Approval Modal */}
+            {(targetReseller?.subscriptionPlan?.name || targetReseller?.manualPaymentDetails?.methodName) && (
+              <div className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/5 space-y-2 text-xs">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-1.5">
+                  <span className="font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                    <CreditCard className="h-3.5 w-3.5" />
+                    Submitted Package & Payment Details
+                  </span>
+                  {targetReseller?.subscriptionPlan?.name && (
+                    <Badge className="bg-purple-600 text-white text-[10px]">
+                      {targetReseller.subscriptionPlan.name} (৳{targetReseller.subscriptionPlan.price || 0})
+                    </Badge>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div>
+                    <span className="text-muted-foreground block">Payment Method:</span>
+                    <span className="font-bold uppercase text-foreground">
+                      {targetReseller?.manualPaymentDetails?.methodName || 'N/A'}
+                      {targetReseller?.manualPaymentDetails?.providerName
+                        ? ` (${targetReseller.manualPaymentDetails.providerName})`
+                        : ''}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground block">Amount:</span>
+                    <span className="font-bold text-emerald-600">
+                      ৳{targetReseller?.manualPaymentDetails?.amount || targetReseller?.subscriptionPlan?.price || 0}
+                    </span>
+                  </div>
+                  {targetReseller?.manualPaymentDetails?.senderNumber && (
+                    <div className="col-span-2 flex items-center justify-between bg-background p-2 rounded border">
+                      <div>
+                        <span className="text-muted-foreground block text-[10px]">Sender / Account Number:</span>
+                        <span className="font-mono font-bold text-foreground select-all">
+                          {targetReseller.manualPaymentDetails.senderNumber}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => {
+                          navigator.clipboard.writeText(targetReseller.manualPaymentDetails.senderNumber);
+                          toast.success('Account / Mobile number copied!');
+                        }}
+                      >
+                        <Copy className="h-3 w-3 mr-1" /> Copy
+                      </Button>
+                    </div>
+                  )}
+                  {targetReseller?.manualPaymentDetails?.transactionId && (
+                    <div className="col-span-2 flex items-center justify-between bg-background p-2 rounded border">
+                      <div>
+                        <span className="text-muted-foreground block text-[10px]">Transaction ID (TrxID):</span>
+                        <span className="font-mono font-bold text-foreground select-all">
+                          {targetReseller.manualPaymentDetails.transactionId}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => {
+                          navigator.clipboard.writeText(targetReseller.manualPaymentDetails.transactionId);
+                          toast.success('Transaction ID copied!');
+                        }}
+                      >
+                        <Copy className="h-3 w-3 mr-1" /> Copy
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Quick Preset Buttons */}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-foreground flex items-center gap-1.5">
@@ -1565,6 +1751,240 @@ export default function AdminResellersPage() {
               {savingFee && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
               Save System Fee
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reseller Application & Payment Verification Details Dialog */}
+      <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="p-5 pb-3 border-b shrink-0">
+            <DialogTitle className="flex items-center gap-2">
+              <Store className="h-5 w-5 text-primary" />
+              Reseller Application & Payment Details
+            </DialogTitle>
+            <DialogDescription>
+              Full application information and payment verification details for{' '}
+              <span className="font-bold text-foreground">{detailsReseller?.storeName}</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
+            {/* Store & Applicant Overview */}
+            <div className="p-3.5 rounded-xl border bg-muted/30 space-y-2">
+              <div className="flex items-center justify-between border-b pb-2">
+                <div>
+                  <h4 className="font-bold text-sm text-foreground">{detailsReseller?.storeName}</h4>
+                  <p className="text-[11px] font-mono text-primary">
+                    {detailsReseller?.subdomain}.{ROOT_DOMAIN}
+                  </p>
+                </div>
+                <Badge variant="outline" className={`text-[10px] ${statusBadgeColor[detailsReseller?.status] || ''}`}>
+                  {detailsReseller?.status === 'active'
+                    ? 'Active'
+                    : detailsReseller?.status === 'pending'
+                    ? 'Pending Approval'
+                    : detailsReseller?.status === 'expired'
+                    ? 'Expired'
+                    : detailsReseller?.status === 'rejected'
+                    ? 'Rejected'
+                    : 'Suspended'}
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                <div>
+                  <span className="text-[10px] uppercase text-muted-foreground font-semibold block">Owner Name</span>
+                  <span className="font-bold text-foreground">
+                    {detailsReseller?.userId?.name || detailsReseller?.pickupAddress?.contactPerson || 'N/A'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase text-muted-foreground font-semibold block">Phone Number</span>
+                  <span className="font-bold font-mono text-foreground select-all">
+                    {detailsReseller?.contact?.phone || detailsReseller?.userId?.phone || 'N/A'}
+                  </span>
+                </div>
+                <div className="sm:col-span-2">
+                  <span className="text-[10px] uppercase text-muted-foreground font-semibold block">Email Address</span>
+                  <span className="font-mono text-foreground select-all">
+                    {detailsReseller?.contact?.email || detailsReseller?.userId?.email || 'N/A'}
+                  </span>
+                </div>
+                {detailsReseller?.description && (
+                  <div className="sm:col-span-2">
+                    <span className="text-[10px] uppercase text-muted-foreground font-semibold block">Store Description</span>
+                    <span className="text-muted-foreground">{detailsReseller.description}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Pickup Hub & Address Info */}
+            <div className="p-3.5 rounded-xl border bg-background space-y-2">
+              <div className="flex items-center gap-1.5 font-bold text-foreground border-b pb-1.5">
+                <MapPin className="h-3.5 w-3.5 text-primary" />
+                <span>Pickup / Warehouse Location</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div>
+                  <span className="text-muted-foreground block text-[10px]">Hub Name:</span>
+                  <span className="font-semibold text-foreground">
+                    {detailsReseller?.pickupAddress?.hubName || 'Default Hub'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[10px]">Division / District / Thana:</span>
+                  <span className="font-semibold text-foreground">
+                    {[
+                      detailsReseller?.pickupAddress?.division,
+                      detailsReseller?.pickupAddress?.district,
+                      detailsReseller?.pickupAddress?.thana,
+                    ]
+                      .filter(Boolean)
+                      .join(', ') || 'N/A'}
+                  </span>
+                </div>
+                <div className="col-span-2">
+                  <span className="text-muted-foreground block text-[10px]">Full Pickup Address:</span>
+                  <span className="font-semibold text-foreground">
+                    {detailsReseller?.pickupAddress?.address || detailsReseller?.contact?.address || 'N/A'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Selected Package & Manual Payment Verification Info */}
+            <div className="p-4 rounded-xl border-2 border-emerald-500/30 bg-emerald-500/5 space-y-3">
+              <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                <div className="flex items-center gap-1.5 font-bold text-emerald-700 dark:text-emerald-400">
+                  <CreditCard className="h-4 w-4" />
+                  <span>Selected Package & Payment Verification</span>
+                </div>
+                {detailsReseller?.subscriptionPlan?.name ? (
+                  <Badge className="bg-purple-600 text-white text-[10px] font-bold">
+                    {detailsReseller.subscriptionPlan.name} (৳{detailsReseller.subscriptionPlan.price || 0})
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[10px]">No Package Recorded</Badge>
+                )}
+              </div>
+
+              {detailsReseller?.manualPaymentDetails?.methodName ? (
+                <div className="grid grid-cols-2 gap-2.5 text-[11px]">
+                  <div className="bg-background p-2.5 rounded-lg border">
+                    <span className="text-[10px] text-muted-foreground uppercase font-semibold block">Payment Method</span>
+                    <span className="font-black uppercase text-foreground text-xs">
+                      {detailsReseller.manualPaymentDetails.methodName}
+                    </span>
+                  </div>
+                  <div className="bg-background p-2.5 rounded-lg border">
+                    <span className="text-[10px] text-muted-foreground uppercase font-semibold block">Paid Amount</span>
+                    <span className="font-black text-emerald-600 text-sm">
+                      ৳{detailsReseller.manualPaymentDetails.amount || detailsReseller?.subscriptionPlan?.price || 0}
+                    </span>
+                  </div>
+
+                  {detailsReseller.manualPaymentDetails.providerName && (
+                    <div className="col-span-2 bg-background p-2.5 rounded-lg border">
+                      <span className="text-[10px] text-muted-foreground uppercase font-semibold block">
+                        Provider / Bank Name (Bangla QR)
+                      </span>
+                      <span className="font-bold text-foreground text-xs select-all">
+                        {detailsReseller.manualPaymentDetails.providerName}
+                      </span>
+                    </div>
+                  )}
+
+                  {detailsReseller.manualPaymentDetails.senderNumber && (
+                    <div className="col-span-2 bg-background p-2.5 rounded-lg border flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] text-muted-foreground uppercase font-semibold block">
+                          Sender Mobile / Account Number
+                        </span>
+                        <span className="font-mono font-black text-foreground text-sm select-all">
+                          {detailsReseller.manualPaymentDetails.senderNumber}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2.5 text-[10px] font-bold"
+                        onClick={() => {
+                          navigator.clipboard.writeText(detailsReseller.manualPaymentDetails.senderNumber);
+                          toast.success('Sender / Account number copied!');
+                        }}
+                      >
+                        <Copy className="h-3 w-3 mr-1" /> Copy
+                      </Button>
+                    </div>
+                  )}
+
+                  {detailsReseller.manualPaymentDetails.transactionId && (
+                    <div className="col-span-2 bg-background p-2.5 rounded-lg border flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] text-muted-foreground uppercase font-semibold block">
+                          Transaction ID (TrxID)
+                        </span>
+                        <span className="font-mono font-black text-foreground text-sm select-all">
+                          {detailsReseller.manualPaymentDetails.transactionId}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2.5 text-[10px] font-bold"
+                        onClick={() => {
+                          navigator.clipboard.writeText(detailsReseller.manualPaymentDetails.transactionId);
+                          toast.success('Transaction ID copied!');
+                        }}
+                      >
+                        <Copy className="h-3 w-3 mr-1" /> Copy
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-muted-foreground italic text-[11px]">
+                  No manual payment verification details recorded for this application.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="p-4 px-5 border-t bg-muted/20 flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <Button variant="outline" size="sm" onClick={() => setDetailsDialogOpen(false)}>
+              Close
+            </Button>
+            <div className="flex items-center gap-2">
+              {detailsReseller?.status === 'pending' && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => {
+                    setDetailsDialogOpen(false);
+                    handleStatusChange(detailsReseller._id, 'rejected', detailsReseller.storeName);
+                  }}
+                >
+                  <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                  Reject
+                </Button>
+              )}
+              <Button
+                size="sm"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                onClick={() => {
+                  const target = detailsReseller;
+                  setDetailsDialogOpen(false);
+                  if (target) openActivationModal(target);
+                }}
+              >
+                <Check className="mr-1.5 h-3.5 w-3.5" />
+                {detailsReseller?.status === 'active' ? 'Manage Expiry / Fee' : 'Approve & Set Expiry'}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

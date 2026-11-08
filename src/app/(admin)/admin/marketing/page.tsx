@@ -147,9 +147,9 @@ export default function MarketingSettingsPage() {
         },
       },
       manualPaymentConfig: {
-        bkash: { number: '', qrCode: '', active: false },
-        nagad: { number: '', qrCode: '', active: false },
-        rocket: { number: '', qrCode: '', active: false },
+        bkash: { number: '01919011101', qrCode: '', active: false },
+        nagad: { number: '01919011101', qrCode: '', active: false },
+        rocket: { number: '01919011101', qrCode: '', active: false },
         banglaQr: { qrCode: '', active: false },
         instructions: '',
       },
@@ -202,17 +202,17 @@ export default function MarketingSettingsPage() {
                 },
                 manualPaymentConfig: {
                   bkash: {
-                    number: result.data.manualPaymentConfig?.bkash?.number || '',
+                    number: result.data.manualPaymentConfig?.bkash?.number || '01919011101',
                     qrCode: result.data.manualPaymentConfig?.bkash?.qrCode || '',
                     active: result.data.manualPaymentConfig?.bkash?.active ?? false,
                   },
                   nagad: {
-                    number: result.data.manualPaymentConfig?.nagad?.number || '',
+                    number: result.data.manualPaymentConfig?.nagad?.number || '01919011101',
                     qrCode: result.data.manualPaymentConfig?.nagad?.qrCode || '',
                     active: result.data.manualPaymentConfig?.nagad?.active ?? false,
                   },
                   rocket: {
-                    number: result.data.manualPaymentConfig?.rocket?.number || '',
+                    number: result.data.manualPaymentConfig?.rocket?.number || '01919011101',
                     qrCode: result.data.manualPaymentConfig?.rocket?.qrCode || '',
                     active: result.data.manualPaymentConfig?.rocket?.active ?? false,
                   },

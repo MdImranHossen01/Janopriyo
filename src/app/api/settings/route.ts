@@ -25,6 +25,29 @@ const getMaskedSettings = (raw: any, masked: any) => ({
       webhookSecret: masked.paymentConfig.stripe.webhookSecret ? '********************' : '',
     } : null,
   } : masked.paymentConfig,
+  manualPaymentConfig: {
+    ...masked.manualPaymentConfig,
+    bkash: {
+      number: masked.manualPaymentConfig?.bkash?.number?.trim() || '01919011101',
+      qrCode: masked.manualPaymentConfig?.bkash?.qrCode || '',
+      active: masked.manualPaymentConfig?.bkash?.active ?? false,
+    },
+    nagad: {
+      number: masked.manualPaymentConfig?.nagad?.number?.trim() || '01919011101',
+      qrCode: masked.manualPaymentConfig?.nagad?.qrCode || '',
+      active: masked.manualPaymentConfig?.nagad?.active ?? false,
+    },
+    rocket: {
+      number: masked.manualPaymentConfig?.rocket?.number?.trim() || '01919011101',
+      qrCode: masked.manualPaymentConfig?.rocket?.qrCode || '',
+      active: masked.manualPaymentConfig?.rocket?.active ?? false,
+    },
+    banglaQr: {
+      qrCode: masked.manualPaymentConfig?.banglaQr?.qrCode || '',
+      active: masked.manualPaymentConfig?.banglaQr?.active ?? false,
+    },
+    instructions: masked.manualPaymentConfig?.instructions || '',
+  },
   aiConfig: masked.aiConfig ? {
     ...masked.aiConfig,
     geminiApiKey: masked.aiConfig.geminiApiKey || null,
