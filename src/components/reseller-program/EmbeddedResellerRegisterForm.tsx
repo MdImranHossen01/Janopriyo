@@ -1303,12 +1303,12 @@ export function EmbeddedResellerRegisterForm({
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-lg sm:text-xl font-black tracking-widest text-slate-900 bg-white px-4 py-2 rounded-xl border border-rose-200 flex-1 text-center select-all">
-                          {selectedMethod.number || fallbackPhone}
+                          {selectedMethod.number || defaultMfsPhone}
                         </p>
                         <button
                           type="button"
                           onClick={() => {
-                            navigator.clipboard.writeText(selectedMethod.number || fallbackPhone);
+                            navigator.clipboard.writeText(selectedMethod.number || defaultMfsPhone);
                             toast.success('নম্বরটি কপি করা হয়েছে!');
                           }}
                           className="h-11 px-4 rounded-xl text-xs font-bold border border-rose-300 bg-white hover:bg-rose-600 hover:text-white text-rose-700 transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
