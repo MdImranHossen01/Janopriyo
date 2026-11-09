@@ -73,19 +73,19 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: 'https',
-        hostname: 'pub-0dadb28394cd4ea8b1f69260c1774617.r2.dev',
+        hostname: 'pub-6ac9c3aac5be4a6587fdf782ebc8cae6.r2.dev',
         port: '',
         pathname: '/**',
       },
       {
         protocol: 'https',
-        hostname: 'cdn.swapnobaz.com',
+        hostname: 'cdn.janopriyo.com',
         port: '',
         pathname: '/**',
       },
       {
         protocol: 'https',
-        hostname: '*.swapnobaz.com',
+        hostname: '*.janopriyo.com',
         port: '',
         pathname: '/**',
       },
