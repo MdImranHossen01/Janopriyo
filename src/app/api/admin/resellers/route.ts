@@ -75,6 +75,17 @@ export async function PATCH(request: NextRequest) {
     if (storeName !== undefined) {
       updatePayload.storeName = storeName.trim();
     }
+    if (subdomain !== undefined || customDomain !== undefined) {
+      const isSuperAdmin =
+        (session.user as any).role === 'super_admin' ||
+        session.user.email === 'imranshuvo101@gmail.com';
+      if (!isSuperAdmin) {
+        return NextResponse.json(
+          { error: 'Only super_admin can configure reseller domains.' },
+          { status: 403 }
+        );
+      }
+    }
     if (subdomain !== undefined) {
       const cleanSub = subdomain.toLowerCase().replace(/[^a-z0-9-]/g, '');
       if (!cleanSub) {
