@@ -1241,15 +1241,21 @@ export default function AdminResellersPage() {
                 </span>
                 <span className="text-[10px] font-mono bg-primary/10 text-primary px-1.5 py-0.5 rounded font-semibold">Vercel DNS</span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono bg-background p-2 rounded border">
+              <div className="space-y-2 text-[11px] font-mono bg-background p-2.5 rounded border">
                 <div>
-                  <span className="text-[10px] text-muted-foreground block font-sans font-semibold">SUBDOMAIN (CNAME - PROXIED)</span>
-                  <span className="font-semibold text-foreground break-all">{editSubdomain || 'sub'} &rarr; 0fe50a00c926632a.vercel-dns-017.com</span>
+                  <span className="text-[10px] text-muted-foreground block font-sans font-semibold">
+                    1. FOR SUBDOMAIN (In {ROOT_DOMAIN} Cloudflare DNS — CNAME, Proxied)
+                  </span>
+                  <span className="font-semibold text-foreground block">
+                    {editSubdomain || 'sub'} &rarr; 0fe50a00c926632a.vercel-dns-017.com
+                  </span>
                 </div>
-                <div>
-                  <span className="text-[10px] text-muted-foreground block font-sans font-semibold">CUSTOM DOMAIN (A / CNAME)</span>
-                  <span className="font-semibold text-foreground block">@ &rarr; 76.76.21.21</span>
-                  <span className="font-semibold text-foreground block">www &rarr; cname.vercel-dns.com</span>
+                <div className="pt-1.5 border-t">
+                  <span className="text-[10px] text-muted-foreground block font-sans font-semibold">
+                    2. FOR CUSTOM DOMAIN (In Client&apos;s DNS — A &amp; CNAME)
+                  </span>
+                  <span className="font-semibold text-foreground block">@ &rarr; 76.76.21.21 (A)</span>
+                  <span className="font-semibold text-foreground block">www &rarr; cname.vercel-dns.com (CNAME)</span>
                 </div>
               </div>
               <p className="text-[10px] text-muted-foreground">
