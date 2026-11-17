@@ -165,7 +165,28 @@ export async function PATCH(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ success: true, reseller: updated });
+    let domainProvision: any = null;
+    if (body.autoProvisionDomain && updated?.subdomain) {
+      const isSuperAdmin =
+        (session.user as any).role === 'super_admin' ||
+        session.user.email === 'imranshuvo101@gmail.com';
+      if (isSuperAdmin) {
+        try {
+          const { provisionResellerDomain } = await import('@/lib/domainAutomation');
+          domainProvision = await provisionResellerDomain({
+            subdomain: updated.subdomain,
+            customDomain: updated.customDomain,
+          });
+        } catch (provErr: any) {
+          domainProvision = {
+            success: false,
+            message: provErr?.message || 'Failed to auto-provision domain',
+          };
+        }
+      }
+    }
+
+    return NextResponse.json({ success: true, reseller: updated, domainProvision });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
   }

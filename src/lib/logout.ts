@@ -57,6 +57,10 @@ export async function handleSignOut(targetUrl?: string) {
     try {
       sessionStorage.clear();
       localStorage.removeItem('nextauth.message');
+      localStorage.removeItem('__jp_session_cache_v1__');
+      localStorage.removeItem('__jp_profile_cache_v1__');
+      localStorage.removeItem('__jp_wishlist_cache_v1__');
+      localStorage.removeItem('__jp_has_auth_hint__');
     } catch {
       // Ignore
     }

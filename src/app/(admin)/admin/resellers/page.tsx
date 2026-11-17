@@ -317,7 +317,7 @@ export default function AdminResellersPage() {
     setDomainDialogOpen(true);
   };
 
-  const handleSaveDomain = async () => {
+  const handleSaveDomain = async (autoProvision = false) => {
     if (!isSuperAdmin) return;
     if (!selectedReseller) return;
     const cleanSub = editSubdomain.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
@@ -335,11 +335,20 @@ export default function AdminResellersPage() {
           resellerId: selectedReseller._id,
           subdomain: cleanSub,
           customDomain: editCustomDomain.trim().toLowerCase(),
+          autoProvisionDomain: autoProvision,
         }),
       });
       const data = await res.json();
       if (res.ok) {
-        toast.success('Domain configuration updated successfully');
+        if (autoProvision && data.domainProvision) {
+          if (data.domainProvision.success) {
+            toast.success(data.domainProvision.message || 'Connected to Vercel & Cloudflare!');
+          } else {
+            toast.warning(`Domain saved in DB, but auto-connect issue: ${data.domainProvision.message}`);
+          }
+        } else {
+          toast.success('Domain configuration updated successfully');
+        }
         setDomainDialogOpen(false);
         fetchResellers();
       } else {
@@ -1264,7 +1273,7 @@ export default function AdminResellersPage() {
             </div>
           </div>
 
-          <DialogFooter className="flex items-center justify-end gap-2 pt-2">
+          <DialogFooter className="flex flex-wrap items-center justify-end gap-2 pt-2">
             <Button
               variant="outline"
               size="sm"
@@ -1274,13 +1283,22 @@ export default function AdminResellersPage() {
               Cancel
             </Button>
             <Button
+              variant="secondary"
               size="sm"
-              onClick={handleSaveDomain}
+              onClick={() => handleSaveDomain(false)}
+              disabled={savingDomain}
+              className="font-semibold"
+            >
+              Save Only
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => handleSaveDomain(true)}
               disabled={savingDomain}
               className="font-semibold"
             >
               {savingDomain && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Save Domain Configuration
+              Save &amp; Auto-Connect (Vercel + CF)
             </Button>
           </DialogFooter>
         </DialogContent>
