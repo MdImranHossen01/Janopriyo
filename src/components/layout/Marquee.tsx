@@ -2,13 +2,20 @@
 
 import { useEffect, useState } from 'react';
 import FastMarquee from 'react-fast-marquee';
+import { useSettings } from '@/components/SettingsProvider';
 
 export function Marquee({ marqueeText: initialText }: { marqueeText?: string }) {
-  const [marqueeText, setMarqueeText] = useState(initialText || '');
+  const settings = useSettings();
+  const resolvedInitial = initialText !== undefined ? initialText : settings?.marqueeText;
+  const [marqueeText, setMarqueeText] = useState(resolvedInitial || '');
 
   useEffect(() => {
     if (initialText !== undefined) {
       setMarqueeText(initialText);
+      return;
+    }
+    if (settings?.marqueeText !== undefined) {
+      setMarqueeText(settings.marqueeText);
       return;
     }
 

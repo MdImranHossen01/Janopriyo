@@ -4,6 +4,8 @@ import React, { createContext, useContext } from 'react';
 
 interface SettingsContextType {
   isReseller?: boolean;
+  categories?: any[];
+  brands?: any[];
   brandName?: string;
   siteDescription?: string;
   logoUrl?: string;
