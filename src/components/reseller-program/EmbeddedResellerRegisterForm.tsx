@@ -1029,12 +1029,12 @@ export function EmbeddedResellerRegisterForm({
             </div>
 
             <p className="text-xs text-purple-200/80">
-              নিচের যেকোনো একটি পেমেন্ট মাধ্যম (বিকাশ, নগদ, রকেট, বাংলা কিউআর অথবা ব্যাংক) সিলেক্ট করে নির্ধারিত <strong>৳{activePackage.offerPrice.toLocaleString('bn-BD')}</strong> পেমেন্ট সম্পন্ন করুন এবং ভেরিফিকেশন তথ্য দিন:
+              নিচের যেকোনো একটি পেমেন্ট মাধ্যম (বিকাশ, বাংলা কিউআর অথবা ব্যাংক) সিলেক্ট করে নির্ধারিত <strong>৳{activePackage.offerPrice.toLocaleString('bn-BD')}</strong> পেমেন্ট সম্পন্ন করুন এবং ভেরিফিকেশন তথ্য দিন:
             </p>
 
-            {/* 5 Manual Payment Provider Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
-              {(['bkash', 'nagad', 'rocket', 'banglaQr', 'islamiBank'] as const).map((method) => {
+            {/* 3 Manual Payment Provider Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              {(['bkash', 'banglaQr', 'islamiBank'] as const).map((method) => {
                 const config = getMethodConfig(method);
                 if (!config?.active) return null;
                 const isSelected = selectedMethod?.id === method;
@@ -1108,7 +1108,7 @@ export function EmbeddedResellerRegisterForm({
 
             {!selectedMethod?.id && (
               <p className="text-xs text-amber-300 font-bold text-center bg-amber-500/10 border border-amber-400/20 rounded-xl py-2.5 px-4 animate-pulse">
-                👆 পেমেন্ট করতে উপরের যেকোনো একটি মাধ্যম (bKash / Nagad / Rocket / Bangla QR / Bank) সিলেক্ট করুন
+                👆 পেমেন্ট করতে উপরের যেকোনো একটি মাধ্যম (bKash / Bangla QR / Bank) সিলেক্ট করুন
               </p>
             )}
 
