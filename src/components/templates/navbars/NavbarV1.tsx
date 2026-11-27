@@ -617,13 +617,13 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                     </nav>
                     <div style={{ flexShrink: 0 }} className="px-4 py-3 border-t border-border bg-background flex gap-2">
                       {!isResellerStore && (
-                        <Link href="/reseller-program" onClick={() => setMobileOpen(false)} className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg border border-primary text-primary text-xs font-bold py-2 hover:bg-primary hover:text-white transition-colors">
+                        <Link prefetch={false} href="/reseller-program" onClick={() => setMobileOpen(false)} className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg border border-primary text-primary text-xs font-bold py-2 hover:bg-primary hover:text-white transition-colors">
                           <Sparkles className="h-3.5 w-3.5" />
                           Be a Reseller
                         </Link>
                       )}
                       {!session && (
-                        <Link href="/login" onClick={() => setMobileOpen(false)} className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg bg-primary text-white text-xs font-bold py-2 hover:bg-primary/90 transition-colors">
+                        <Link prefetch={false} href="/login" onClick={() => setMobileOpen(false)} className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg bg-primary text-white text-xs font-bold py-2 hover:bg-primary/90 transition-colors">
                           <User className="h-3.5 w-3.5" />
                           Login
                         </Link>
@@ -903,12 +903,12 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                           {(session.user as any)?.role === 'super_admin' ? (
                             <>
                               <DropdownMenuItem asChild>
-                                <Link href="/admin/dashboard" className="cursor-pointer">
+                                <Link prefetch={false} href="/admin/dashboard" className="cursor-pointer">
                                   <LayoutDashboard className="mr-2 h-4 w-4" /> Admin Dashboard
                                 </Link>
                               </DropdownMenuItem>
                               <DropdownMenuItem asChild>
-                                <Link href="/admin/system-design" className="cursor-pointer">
+                                <Link prefetch={false} href="/admin/system-design" className="cursor-pointer">
                                   <Settings className="mr-2 h-4 w-4" /> Infrastructure &amp; Marketing
                                 </Link>
                               </DropdownMenuItem>
@@ -916,12 +916,12 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                           ) : (session.user as any)?.role === 'admin' ? (
                             <>
                               <DropdownMenuItem asChild>
-                                <Link href="/admin/dashboard" className="cursor-pointer">
+                                <Link prefetch={false} href="/admin/dashboard" className="cursor-pointer">
                                   <LayoutDashboard className="mr-2 h-4 w-4" /> Admin Dashboard
                                 </Link>
                               </DropdownMenuItem>
                               <DropdownMenuItem asChild>
-                                <Link href="/admin/orders" className="cursor-pointer">
+                                <Link prefetch={false} href="/admin/orders" className="cursor-pointer">
                                   <Truck className="mr-2 h-4 w-4" /> Manage Orders
                                 </Link>
                               </DropdownMenuItem>
@@ -929,17 +929,17 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                           ) : (session.user as any)?.role === 'reseller' ? (
                             <>
                               <DropdownMenuItem asChild>
-                                <Link href="/reseller-dashboard" className="cursor-pointer">
+                                <Link prefetch={false} href="/reseller-dashboard" className="cursor-pointer">
                                   <LayoutDashboard className="mr-2 h-4 w-4" /> Reseller Dashboard
                                 </Link>
                               </DropdownMenuItem>
                               <DropdownMenuItem asChild>
-                                <Link href="/reseller/products" className="cursor-pointer">
+                                <Link prefetch={false} href="/reseller/products" className="cursor-pointer">
                                   <Store className="mr-2 h-4 w-4" /> My Products
                                 </Link>
                               </DropdownMenuItem>
                               <DropdownMenuItem asChild>
-                                <Link href="/reseller/orders" className="cursor-pointer">
+                                <Link prefetch={false} href="/reseller/orders" className="cursor-pointer">
                                   <Truck className="mr-2 h-4 w-4" /> Store Orders
                                 </Link>
                               </DropdownMenuItem>
@@ -947,7 +947,7 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                           ) : (
                             <>
                               <DropdownMenuItem asChild>
-                                <Link href="/dashboard" className="cursor-pointer">
+                                <Link prefetch={false} href="/dashboard" className="cursor-pointer">
                                   <LayoutDashboard className="mr-2 h-4 w-4" /> Dashboard
                                 </Link>
                               </DropdownMenuItem>
@@ -966,7 +966,7 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                       </DropdownMenuContent>
                     </DropdownMenu>
                   ) : (
-                    <Link
+                    <Link prefetch={false}
                       href="/login"
                       className="h-10 w-10 flex items-center justify-center rounded-xl transition-all cursor-pointer hover:text-primary"
                       aria-label="Log in"
@@ -1147,12 +1147,12 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                               {(session.user as any)?.role === 'super_admin' ? (
                                 <>
                                   <DropdownMenuItem asChild>
-                                    <Link href="/admin/dashboard" className="cursor-pointer">
+                                    <Link prefetch={false} href="/admin/dashboard" className="cursor-pointer">
                                       <LayoutDashboard className="mr-2 h-4 w-4" /> Admin Dashboard
                                     </Link>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem asChild>
-                                    <Link href="/admin/system-design" className="cursor-pointer">
+                                    <Link prefetch={false} href="/admin/system-design" className="cursor-pointer">
                                       <Settings className="mr-2 h-4 w-4" /> Infrastructure &amp; Marketing
                                     </Link>
                                   </DropdownMenuItem>
@@ -1160,12 +1160,12 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                               ) : (session.user as any)?.role === 'admin' ? (
                                 <>
                                   <DropdownMenuItem asChild>
-                                    <Link href="/admin/dashboard" className="cursor-pointer">
+                                    <Link prefetch={false} href="/admin/dashboard" className="cursor-pointer">
                                       <LayoutDashboard className="mr-2 h-4 w-4" /> Admin Dashboard
                                     </Link>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem asChild>
-                                    <Link href="/admin/orders" className="cursor-pointer">
+                                    <Link prefetch={false} href="/admin/orders" className="cursor-pointer">
                                       <Truck className="mr-2 h-4 w-4" /> Manage Orders
                                     </Link>
                                   </DropdownMenuItem>
@@ -1173,17 +1173,17 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                               ) : (session.user as any)?.role === 'reseller' ? (
                                 <>
                                   <DropdownMenuItem asChild>
-                                    <Link href="/reseller-dashboard" className="cursor-pointer">
+                                    <Link prefetch={false} href="/reseller-dashboard" className="cursor-pointer">
                                       <LayoutDashboard className="mr-2 h-4 w-4" /> Reseller Dashboard
                                     </Link>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem asChild>
-                                    <Link href="/reseller/products" className="cursor-pointer">
+                                    <Link prefetch={false} href="/reseller/products" className="cursor-pointer">
                                       <Store className="mr-2 h-4 w-4" /> My Products
                                     </Link>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem asChild>
-                                    <Link href="/reseller/orders" className="cursor-pointer">
+                                    <Link prefetch={false} href="/reseller/orders" className="cursor-pointer">
                                       <Truck className="mr-2 h-4 w-4" /> Store Orders
                                     </Link>
                                   </DropdownMenuItem>
@@ -1191,7 +1191,7 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                               ) : (
                                 <>
                                   <DropdownMenuItem asChild>
-                                    <Link href="/dashboard" className="cursor-pointer">
+                                    <Link prefetch={false} href="/dashboard" className="cursor-pointer">
                                       <LayoutDashboard className="mr-2 h-4 w-4" /> Dashboard
                                     </Link>
                                   </DropdownMenuItem>
@@ -1210,7 +1210,7 @@ export default function NavbarV1({ initialCategories = [], initialBrands = [] }:
                           </DropdownMenuContent>
                         </DropdownMenu>
                       ) : (
-                        <Link
+                        <Link prefetch={false}
                           href="/login"
                           className="h-8 w-8 flex items-center justify-center rounded-xl transition-all cursor-pointer hover:text-primary"
                           aria-label="Log in"
